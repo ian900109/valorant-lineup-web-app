@@ -32,6 +32,7 @@ export default function App() {
   const [agentCatalog, setAgentCatalog] = useState(defaultAgents)
   const [videoOpen, setVideoOpen] = useState(false)
   const stageRef = useRef<HTMLDivElement>(null)
+  const worldRef = useRef<HTMLDivElement>(null)
   const pointerRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
   const agent = agentCatalog.find((item) => item.id === agentId) ?? agentCatalog[0] ?? defaultAgents[0]
   const selectedMap = mapCatalog.find((item) => item.id === mapId) ?? mapCatalog[0] ?? defaultMaps[0]
@@ -62,12 +63,16 @@ export default function App() {
   }
   function chooseMap(value: string) { setMapId(value); setSelected(null); setZoom(1); setPan({ x: 0, y: 0 }) }
   function pointFromEvent(event: React.PointerEvent) {
-    const rect = stageRef.current!.getBoundingClientRect()
-    return { x: bounds(((event.clientX - rect.left - rect.width / 2 - pan.x) / zoom + rect.width / 2) / rect.width), y: bounds(((event.clientY - rect.top - rect.height / 2 - pan.y) / zoom + rect.height / 2) / rect.height) }
+    const rect = worldRef.current!.getBoundingClientRect()
+    const x = (event.clientX - rect.left) / rect.width
+    const y = (event.clientY - rect.top) / rect.height
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null
+    return { x: bounds(x), y: bounds(y) }
   }
   function onMapPointerUp(event: React.PointerEvent) {
     if (pick) {
       const p = pointFromEvent(event)
+      if (!p) return
       if (pick === 'start') setStart(p); else setImpact(p)
       setPick(null); setModal('create'); return
     }
@@ -118,14 +123,14 @@ export default function App() {
       <section className="workspace"><div className="map-card"><div className="toolbar"><label>地圖</label><select value={mapId} onChange={(e) => chooseMap(e.target.value)}>{mapCatalog.map((map) => <option key={map.id} value={map.id}>{map.shortName} · {map.name}</option>)}</select><select value={side} onChange={(e) => setSide(e.target.value)}><option>全部</option><option>進攻</option><option>防守</option></select><div className="search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜尋點位" /></div></div>
         <div className="agent-strip"><span className="strip-label">AGENT</span>{agentCatalog.map((item) => <button key={item.id} className={`agent-chip ${item.id === agentId ? 'chosen' : ''}`} onClick={() => { setAgentId(item.id); setAbilityId(null); setSelected(null) }}><span className="agent-initial">{item.portraitUrl ? <img src={item.portraitUrl} alt="" /> : item.name.slice(0, 1)}</span><span className="agent-label">{item.name}</span></button>)}</div>
         <div className={`map-stage ${pick ? 'picking' : ''}`} ref={stageRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onMapPointerUp} onPointerCancel={() => { pointerRef.current = null }} onWheel={(e) => { e.preventDefault(); zoomBy(e.deltaY < 0 ? .12 : -.12) }}>
-          <div className="map-world" style={{ transform: `translate(${pan.x}px,${pan.y}px) scale(${zoom})` }}><TacticalMap mapId={mapId} mapShortName={selectedMap.shortName} imageUrl={selectedMap.imageUrl} />
+          <div ref={worldRef} className={`map-world ${selectedMap.imageUrl ? 'map-world-with-image' : ''}`} style={{ transform: selectedMap.imageUrl ? `translate(calc(-50% + ${pan.x}px),${pan.y}px) scale(${zoom})` : `translate(${pan.x}px,${pan.y}px) scale(${zoom})` }}><TacticalMap mapId={mapId} mapShortName={selectedMap.shortName} imageUrl={selectedMap.imageUrl} />
             <svg className="routes" viewBox="0 0 1000 620" preserveAspectRatio="none">{visible.map((item) => <line key={item.id} x1={item.start.x * 1000} y1={item.start.y * 620} x2={item.impact.x * 1000} y2={item.impact.y * 620} />)}</svg>
             {visible.map((item) => <div key={`${item.id}-start`} className={`map-marker start ${selected?.id === item.id ? 'selected' : ''}`} style={{ left: `${item.start.x * 100}%`, top: `${item.start.y * 100}%` }} onPointerDown={(e) => e.stopPropagation()} onClick={() => { setSelected(item); setVideoOpen(false) }} title={`起始位置：${item.startLabel}`}><span>S</span></div>)}
             {visible.map((item) => <button key={item.id} className={`map-marker impact ${selected?.id === item.id ? 'selected' : ''}`} style={{ left: `${item.impact.x * 100}%`, top: `${item.impact.y * 100}%` }} onPointerDown={(e) => e.stopPropagation()} onClick={() => { setSelected(item); setVideoOpen(false) }} title={`生效位置：${item.site}`}><Crosshair size={16} /></button>)}
             {pick && <div className="pick-preview" style={{ left: `${(pick === 'start' ? start?.x : impact?.x) ? (pick === 'start' ? start!.x : impact!.x) * 100 : 50}%`, top: `${(pick === 'start' ? start?.y : impact?.y) ? (pick === 'start' ? start!.y : impact!.y) * 100 : 50}%` }} />}
           </div>
           {pick && <div className="pick-prompt">請在地圖點選{pick === 'start' ? '起始位置' : '技能生效位置'} <button onClick={(e) => { e.stopPropagation(); setPick(null); setModal('create') }}>取消</button></div>}
-          <div className="map-note">地圖底圖目前為測試示意圖，座標與互動可先試用</div><div className="zoom-controls"><button aria-label="縮小" onClick={() => zoomBy(-.25)}><ZoomOut size={16} /></button><span>{Math.round(zoom * 100)}%</span><button aria-label="放大" onClick={() => zoomBy(.25)}><ZoomIn size={16} /></button><button aria-label="重設" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}><RotateCcw size={15} /></button></div>
+          <div className="map-note">{selectedMap.imageUrl ? '平面圖已載入 · 滾輪縮放可查看細節' : '目前顯示測試示意底圖'}</div><div className="zoom-controls"><button aria-label="縮小" onClick={() => zoomBy(-.25)}><ZoomOut size={16} /></button><span>{Math.round(zoom * 100)}%</span><button aria-label="放大" onClick={() => zoomBy(.25)}><ZoomIn size={16} /></button><button aria-label="重設" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}><RotateCcw size={15} /></button></div>
           <div className="map-legend"><span className="legend-start">S</span>起始位置 <span className="legend-impact"><MapPin size={12} /></span>生效位置</div>
         </div><div className="map-foot"><span>{selectedMap.shortName} · 戰術地圖</span><span>滾輪縮放 · 放大後拖曳移動</span></div></div>
         <aside className="side-card"><div className="side-heading"><div><b>LOADOUT</b><small>選擇特務與技能</small></div><button className="text-button" onClick={() => { setAbilityId(null); setSide('全部'); setQuery(''); setSelected(null) }}>重設</button></div>
