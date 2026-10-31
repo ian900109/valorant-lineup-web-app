@@ -1,0 +1,12 @@
+Demo asset source notes
+
+The Ascent tactical map image and Brimstone portrait/ability icons were downloaded from the Valorant-API community asset CDN:
+https://valorant-api.com/
+https://media.valorant-api.com/maps/7eaecc1b-4337-bbf6-6ab9-04b8f06b3319/displayicon.png
+https://media.valorant-api.com/agents/9f0d8ba9-4140-b941-57d3-a7ad57c6b417/displayicon.png
+https://media.valorant-api.com/agents/9f0d8ba9-4140-b941-57d3-a7ad57c6b417/abilities/ability1/displayicon.png
+https://media.valorant-api.com/agents/9f0d8ba9-4140-b941-57d3-a7ad57c6b417/abilities/ability2/displayicon.png
+https://media.valorant-api.com/agents/9f0d8ba9-4140-b941-57d3-a7ad57c6b417/abilities/grenade/displayicon.png
+https://media.valorant-api.com/agents/9f0d8ba9-4140-b941-57d3-a7ad57c6b417/abilities/ultimate/displayicon.png
+
+The source presents these images as VALORANT game assets; Riot Games owns the VALORANT intellectual property. This sample is for personal testing. See Riot's current policies at https://www.riotgames.com/en/legal and the VALORANT developer documentation at https://developer.riotgames.com/docs/valorant.

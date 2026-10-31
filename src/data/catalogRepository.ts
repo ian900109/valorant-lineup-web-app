@@ -76,6 +76,21 @@ export async function updateAbilityIcon(id: string, file: File) {
   if (error) throw error
 }
 
+async function bundledDemoImage(name: string) {
+  const response = await fetch(`/assets/valorant-demo/${name}`)
+  if (!response.ok) throw new Error(`無法讀取範例圖片：${name}`)
+  return new File([await response.blob()], name, { type: 'image/png' })
+}
+
+export async function importDemoAssets() {
+  await updateMapImage('ascent', await bundledDemoImage('ascent-map.png'))
+  await updateAgentPortrait('brimstone', await bundledDemoImage('brimstone-portrait.png'))
+  await updateAbilityIcon('incendiary', await bundledDemoImage('brimstone-ability1.png'))
+  await updateAbilityIcon('sky-smoke', await bundledDemoImage('brimstone-ability2.png'))
+  await updateAbilityIcon('stim-beacon', await bundledDemoImage('brimstone-grenade.png'))
+  await updateAbilityIcon('orbital-strike', await bundledDemoImage('brimstone-ultimate.png'))
+}
+
 export async function deleteMap(id: string) {
   const client = requireSupabase()
   const { count, error: usageError } = await client.from('lineups').select('id', { count: 'exact', head: true }).eq('map_id', id)

@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { ImagePlus, Trash2, Upload } from 'lucide-react'
+import { CloudUpload, ImagePlus, Trash2, Upload } from 'lucide-react'
 import type { Agent, MapRecord } from '../types'
-import { createAgent, createMap, deleteAgent, deleteMap, updateAbilityIcon, updateAgentPortrait, updateMapImage } from '../data/catalogRepository'
+import { createAgent, createMap, deleteAgent, deleteMap, importDemoAssets, updateAbilityIcon, updateAgentPortrait, updateMapImage } from '../data/catalogRepository'
 
 type Props = { section: 'maps' | 'agents'; maps: MapRecord[]; agents: Agent[]; admin: boolean; onRefresh: () => Promise<void>; notify: (message: string) => void }
 const keys = ['Q', 'E', 'C', 'X']
@@ -50,6 +50,7 @@ export default function CatalogManager({ section, maps, agents, admin, onRefresh
   return <div className="catalog-manager">
     {section === 'maps' ? <div className="catalog-content">
       <h3>地圖平面圖 <span className="catalog-count">{maps.length} 張地圖</span></h3>
+      {admin && <div className="demo-import"><div><b>快速試用一組素材</b><small>上傳 Ascent 平面圖、Brimstone 頭像與四個技能圖示至 Supabase</small></div><button className="primary" type="button" disabled={busy} onClick={() => { if (window.confirm('匯入示範素材會替換資料庫中 Ascent 與 Brimstone 目前使用的圖片，確定繼續嗎？')) void run(importDemoAssets, 'Ascent 平面圖與 Brimstone 頭像、技能圖示已上傳') }}><CloudUpload size={15} /> 匯入示範素材</button></div>}
       <div className="asset-list">{maps.map((map) => <article className="asset-card map-asset" key={map.id}>
         <div className="map-thumb">{map.imageUrl ? <img src={map.imageUrl} alt={`${map.name} 平面圖`} /> : <span><ImagePlus size={18} /> 尚未上傳平面圖</span>}</div>
         <div className="asset-info"><b>{map.shortName} · {map.name}</b><small>{map.imageUrl ? '已有地圖圖片' : '尚未上傳平面圖'}</small>
