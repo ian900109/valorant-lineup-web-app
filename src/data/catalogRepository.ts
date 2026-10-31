@@ -49,19 +49,24 @@ async function fetchCatalogImage(url: string, name: string) {
 
 type ApiMap = { displayName: string; mapUrl: string; displayIcon: string | null }
 type ApiAbility = { slot: string; displayName: string; displayIcon: string | null }
-type ApiAgent = { displayName: string; displayIcon: string | null; role: { displayName: string } | null; abilities: ApiAbility[]; isPlayableCharacter: boolean }
+type ApiAgent = { uuid: string; displayName: string; displayIcon: string | null; role: { displayName: string } | null; abilities: ApiAbility[]; isPlayableCharacter: boolean }
 
 export async function importAllCatalogAssets(onProgress: (message: string) => void) {
   const client = requireSupabase()
   onProgress('正在讀取 VALORANT 地圖與特務目錄…')
-  const [mapsResponse, agentsResponse] = await Promise.all([
+  const [mapsResponse, agentsResponse, localizedAgentsResponse] = await Promise.all([
     fetch('https://valorant-api.com/v1/maps?language=zh-TW'),
+    fetch('https://valorant-api.com/v1/agents?isPlayableCharacter=true&language=en-US'),
     fetch('https://valorant-api.com/v1/agents?isPlayableCharacter=true&language=zh-TW'),
   ])
-  if (!mapsResponse.ok || !agentsResponse.ok) throw new Error('VALORANT 素材目錄暫時無法連線，請稍後再試')
-  const [mapPayload, agentPayload] = await Promise.all([mapsResponse.json(), agentsResponse.json()]) as [{ data: ApiMap[] }, { data: ApiAgent[] }]
+  if (!mapsResponse.ok || !agentsResponse.ok || !localizedAgentsResponse.ok) throw new Error('VALORANT 素材目錄暫時無法連線，請稍後再試')
+  const [mapPayload, agentPayload, localizedAgentPayload] = await Promise.all([mapsResponse.json(), agentsResponse.json(), localizedAgentsResponse.json()]) as [{ data: ApiMap[] }, { data: ApiAgent[] }, { data: ApiAgent[] }]
   const maps = mapPayload.data.filter((map) => map.mapUrl && map.displayIcon)
-  const agents = agentPayload.data.filter((agent) => agent.isPlayableCharacter && agent.displayIcon)
+  const localizedAgents = new Map(localizedAgentPayload.data.map((agent) => [agent.uuid, agent]))
+  const agents = agentPayload.data.filter((agent) => agent.isPlayableCharacter && agent.displayIcon).map((agent) => {
+    const localized = localizedAgents.get(agent.uuid)
+    return { ...agent, role: localized?.role ?? agent.role, abilities: localized?.abilities ?? agent.abilities }
+  })
   const [{ data: existingMaps, error: mapReadError }, { data: existingAgents, error: agentReadError }, { data: existingAbilities, error: abilityReadError }] = await Promise.all([
     client.from('maps').select('id'),
     client.from('agents').select('id'),
