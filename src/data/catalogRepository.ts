@@ -76,6 +76,41 @@ export async function updateAbilityIcon(id: string, file: File) {
   if (error) throw error
 }
 
+export async function deleteMap(id: string) {
+  const client = requireSupabase()
+  const { count, error: usageError } = await client.from('lineups').select('id', { count: 'exact', head: true }).eq('map_id', id)
+  if (usageError) throw usageError
+  if (count) throw new Error(`這張地圖還有 ${count} 個點位在使用，請先移除相關點位`)
+  const { data: map, error: mapError } = await client.from('maps').select('image_path').eq('id', id).single()
+  if (mapError) throw mapError
+  const { error } = await client.from('maps').delete().eq('id', id)
+  if (error) throw error
+  if (map.image_path) {
+    const { error: storageError } = await client.storage.from(bucket).remove([map.image_path])
+    if (storageError) throw new Error(`地圖已刪除，但平面圖清理失敗：${storageError.message}`)
+  }
+}
+
+export async function deleteAgent(id: string) {
+  const client = requireSupabase()
+  const { count, error: usageError } = await client.from('lineups').select('id', { count: 'exact', head: true }).eq('agent_id', id)
+  if (usageError) throw usageError
+  if (count) throw new Error(`這位特務還有 ${count} 個點位在使用，請先移除相關點位`)
+  const [{ data: agent, error: agentReadError }, { data: abilities, error: abilityReadError }] = await Promise.all([
+    client.from('agents').select('portrait_path').eq('id', id).single(),
+    client.from('abilities').select('icon_path').eq('agent_id', id),
+  ])
+  if (agentReadError) throw agentReadError
+  if (abilityReadError) throw abilityReadError
+  const { error } = await client.from('agents').delete().eq('id', id)
+  if (error) throw error
+  const paths = [agent.portrait_path, ...abilities.map((ability) => ability.icon_path)].filter((path): path is string => Boolean(path))
+  if (paths.length) {
+    const { error: storageError } = await client.storage.from(bucket).remove(paths)
+    if (storageError) throw new Error(`特務已刪除，但部分素材清理失敗：${storageError.message}`)
+  }
+}
+
 export async function createAgent(input: {
   name: string; role: string; portrait: File
   abilities: Array<{ key: string; name: string; icon: File }>

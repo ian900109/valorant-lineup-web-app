@@ -100,6 +100,8 @@ export default function App() {
   async function refreshCatalog() {
     const catalog = await getCatalog()
     setMapCatalog(catalog.maps); setAgentCatalog(catalog.agents)
+    if (!catalog.maps.some((item) => item.id === mapId) && catalog.maps[0]) { setMapId(catalog.maps[0].id); setZoom(1); setPan({ x: 0, y: 0 }) }
+    if (!catalog.agents.some((item) => item.id === agentId) && catalog.agents[0]) { setAgentId(catalog.agents[0].id); setAbilityId(null); setSelected(null) }
   }
   function zoomBy(delta: number) { const next = Math.max(1, Math.min(3, zoom + delta)); setZoom(next); if (next === 1) setPan({ x: 0, y: 0 }) }
   function onPointerDown(event: React.PointerEvent) {
