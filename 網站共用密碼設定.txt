@@ -1,0 +1,32 @@
+VALORANT 點位網站：共用密碼設定
+
+這項設定會在網站最前面加上密碼頁，並用 Supabase Auth、資料庫 RLS 和私有 Storage 保護內容。密碼不會寫在前端程式裡。網站仍然是公開網址，但沒有授權的訪客讀不到資料。
+
+一、建立共用瀏覽帳號
+1. 打開 Supabase 專案 → Authentication → Users。
+2. 新增一位使用者：
+   Email：lineup-access@example.com
+   Password：自行設定一組要給朋友共用的網站密碼。
+3. 若有「Auto Confirm User」選項，請啟用，因為這個範例 Email 不收信。
+4. 建立後先複製該使用者的 UUID，稍後會用到。
+
+二、套用資料庫權限
+1. 在 GitHub 的新程式碼部署完成後，打開 Supabase → SQL Editor → New query。
+2. 複製並執行 supabase/migrations/202610310002_shared_site_password.sql 的完整內容。
+   這會停止匿名讀取點位資料、將 lineup-assets bucket 設為私有，並建立網站權限檢查函式。
+3. 在 SQL Editor 執行下列指令，將 UUID 替換成第一步複製的值：
+
+   insert into public.site_access_users (user_id)
+   values ('貼上共用瀏覽帳號的 UUID')
+   on conflict (user_id) do nothing;
+
+三、重新整理部署網站
+1. 等待 GitHub Actions 部署成功。
+2. 重新開啟網站，使用剛設定的共用密碼登入。
+3. 管理員仍使用原本自己的 Supabase Email/Password 登入管理功能；共用瀏覽帳號只有讀取權限。
+
+重要
+- 請不要把共用密碼提交到 GitHub，也不要傳給不信任的人。
+- 若更改共用密碼，請在 Supabase Authentication → Users 編輯 lineup-access@example.com 的密碼，朋友下次登入時使用新密碼。
+- 目前程式碼中的共用登入 Email 固定為 lineup-access@example.com，不是密碼。
+- 若網站顯示「網站存取權限尚未設定完成」，代表尚未套用新 SQL，或尚未把共用帳號 UUID 加入 site_access_users。

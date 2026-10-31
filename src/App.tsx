@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Session } from '@supabase/supabase-js'
 import { Crosshair, MapPin, Play, Plus, RotateCcw, Search, ShieldCheck, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
 import { agents as defaultAgents, maps as defaultMaps, seedLineups } from './data/seed'
 import { lineupRepository } from './data/lineupRepository'
 import CatalogManager from './components/CatalogManager'
+import SiteAccessGate from './components/SiteAccessGate'
 import { getCatalog } from './data/catalogRepository'
 import { supabase } from './lib/supabase'
 import type { Lineup } from './types'
@@ -21,6 +23,9 @@ export default function App() {
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [admin, setAdmin] = useState(false)
+  const [authReady, setAuthReady] = useState(!supabase)
+  const [siteUnlocked, setSiteUnlocked] = useState(!supabase && !import.meta.env.PROD)
+  const [accessSetupError, setAccessSetupError] = useState('')
   const [modal, setModal] = useState<'login' | 'create' | null>(null)
   const [page, setPage] = useState<'database' | 'maps' | 'agents'>('database')
   const [pick, setPick] = useState<'start' | 'impact' | null>(null)
@@ -38,12 +43,48 @@ export default function App() {
   const selectedMap = mapCatalog.find((item) => item.id === mapId) ?? mapCatalog[0] ?? defaultMaps[0]
 
   useEffect(() => {
+    const client = supabase
+    if (!client) return
+    let active = true
+    async function applySession(session: Session | null) {
+      if (!active || !client) return
+      if (!session) {
+        setSiteUnlocked(false); setAdmin(false); setAuthReady(true); setAccessSetupError('')
+        return
+      }
+      setAuthReady(false)
+      const { data, error } = await client.rpc('can_access_lineup_site')
+      if (!active) return
+      if (error) {
+        setSiteUnlocked(false)
+        setAccessSetupError('網站存取權限尚未設定完成。請管理員先在 Supabase 執行新的網站密碼設定 SQL。')
+        setAuthReady(true)
+        return
+      }
+      setAccessSetupError('')
+      setSiteUnlocked(Boolean(data))
+      if (data) await verifyAdmin(session.user.id)
+      else setAdmin(false)
+      if (active) setAuthReady(true)
+    }
+    const { data: authListener } = client.auth.onAuthStateChange((_event, session) => {
+      window.setTimeout(() => void applySession(session), 0)
+    })
+    void client.auth.getSession().then(({ data, error }) => {
+      if (error) {
+        if (active) { setAccessSetupError('無法確認登入狀態，請重新整理頁面。'); setAuthReady(true) }
+        return
+      }
+      void applySession(data.session)
+    })
+    return () => { active = false; authListener.subscription.unsubscribe() }
+  }, [])
+
+  useEffect(() => {
+    if (supabase && (!authReady || !siteUnlocked)) return
     let active = true
     void lineupRepository.list().then((items) => { if (active) { setLineups(items); setConnection(supabase ? 'connected' : 'demo') } }).catch((error: unknown) => {
-      if (active) { setLineups(seedLineups); setConnection('error'); console.error('Supabase lineup fetch failed:', error); setNotice('Supabase 尚未完成設定，畫面暫顯示示範資料') }
-    })
-    if (supabase) void supabase.auth.getSession().then(({ data }) => {
-      if (active && data.session) void verifyAdmin(data.session.user.id)
+      if (active) { setLineups(supabase ? [] : seedLineups); setConnection('error'); console.error('Lineup fetch failed:', error); setNotice('點位資料讀取失敗，請確認 Supabase 權限設定') }
     })
     if (supabase) void getCatalog().then((catalog) => {
       if (active) { setMapCatalog(catalog.maps); setAgentCatalog(catalog.agents) }
@@ -51,7 +92,7 @@ export default function App() {
       if (active) { console.error('Supabase catalog fetch failed:', error); setConnection('error'); setNotice('素材目錄讀取失敗，請確認 migrations 已執行') }
     })
     return () => { active = false }
-  }, [])
+  }, [authReady, siteUnlocked])
   const visible = useMemo(() => lineups.filter((item) => item.mapId === mapId && item.agentId === agentId && (!abilityId || item.abilityId === abilityId) && (side === '全部' || item.side === side) && (!query || `${item.title} ${item.site} ${item.startLabel}`.toLowerCase().includes(query.toLowerCase()))), [lineups, mapId, agentId, abilityId, side, query])
 
   function notify(message: string) { setNotice(message); window.setTimeout(() => setNotice(''), 2400) }
@@ -121,8 +162,12 @@ export default function App() {
   function selectAbility(id: string) { setAbilityId(abilityId === id ? null : id); setSelected(null) }
   const markerScale = (1 + (zoom - 1) * .25) / zoom
 
+  if (import.meta.env.PROD && !supabase) return <SiteAccessGate onUnlocked={() => {}} setupError="網站尚未連接 Supabase，為保護資料目前不開放瀏覽。請管理員檢查 GitHub Actions Variables。" />
+  if (supabase && !authReady) return <main className="site-gate-shell"><section className="site-gate-card"><div className="eyebrow">PRIVATE LINEUP LIBRARY</div><h1>正在驗證存取權限…</h1></section></main>
+  if (supabase && !siteUnlocked) return <SiteAccessGate onUnlocked={() => { setSiteUnlocked(true); setAuthReady(true) }} setupError={accessSetupError || undefined} />
+
   return <div className="app-shell">
-    <header className="topbar"><a className="brand" href="#" onClick={(e) => { e.preventDefault(); setPage('database') }}><span className="brand-mark">V</span> LINEUP</a><nav><button className={page === 'database' ? 'active' : ''} onClick={() => setPage('database')}>點位資料庫</button><button className={page === 'maps' ? 'active' : ''} onClick={() => setPage('maps')}>地圖</button><button className={page === 'agents' ? 'active' : ''} onClick={() => setPage('agents')}>特務</button></nav><div className="top-actions"><span className="connection"><i />{connection === 'connected' ? 'SUPABASE' : connection === 'loading' ? 'CONNECTING' : connection === 'error' ? 'SETUP NEEDED' : 'DEMO MODE'}</span><button className="outline" onClick={() => admin ? void supabase?.auth.signOut().then(() => { setAdmin(false); notify('已登出') }) : setModal('login')}>{admin ? '管理員登出' : '管理員登入'}</button></div></header>
+    <header className="topbar"><a className="brand" href="#" onClick={(e) => { e.preventDefault(); setPage('database') }}><span className="brand-mark">V</span> LINEUP</a><nav><button className={page === 'database' ? 'active' : ''} onClick={() => setPage('database')}>點位資料庫</button><button className={page === 'maps' ? 'active' : ''} onClick={() => setPage('maps')}>地圖</button><button className={page === 'agents' ? 'active' : ''} onClick={() => setPage('agents')}>特務</button></nav><div className="top-actions"><span className="connection"><i />{connection === 'connected' ? 'SUPABASE' : connection === 'loading' ? 'CONNECTING' : connection === 'error' ? 'SETUP NEEDED' : 'DEMO MODE'}</span><button className="outline" onClick={() => admin ? void supabase?.auth.signOut().then(() => { setAdmin(false); notify('已登出') }) : setModal('login')}>{admin ? '管理員登出' : '管理員登入'}</button>{supabase && <button className="outline lock-site-button" onClick={() => void supabase?.auth.signOut()} aria-label="鎖定網站">鎖定網站</button>}</div></header>
     <main>{page === 'database' ? <><section className="page-heading"><div><div className="eyebrow">VALORANT TACTICAL DATABASE</div><h1>LINEUP LIBRARY</h1><p>選地圖、特務與技能，確認起點和生效位置。</p></div><div className="lineup-count"><b>{String(lineups.length).padStart(2, '0')}</b> LINEUPS</div></section>
       <section className="workspace"><div className="map-card"><div className="toolbar"><label>地圖</label><select value={mapId} onChange={(e) => chooseMap(e.target.value)}>{mapCatalog.map((map) => <option key={map.id} value={map.id}>{map.shortName} · {map.name}</option>)}</select><select value={side} onChange={(e) => setSide(e.target.value)}><option>全部</option><option>進攻</option><option>防守</option></select><div className="search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜尋點位" /></div></div>
         <div className="agent-strip"><span className="strip-label">AGENT</span>{agentCatalog.map((item) => <button key={item.id} className={`agent-chip ${item.id === agentId ? 'chosen' : ''}`} onClick={() => { setAgentId(item.id); setAbilityId(null); setSelected(null) }}><span className="agent-initial">{item.portraitUrl ? <img src={item.portraitUrl} alt="" /> : item.name.slice(0, 1)}</span><span className="agent-label">{item.name}</span></button>)}</div>

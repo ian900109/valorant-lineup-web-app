@@ -12,8 +12,17 @@ function requireSupabase() {
   if (!supabase) throw new Error('Supabase 尚未設定')
   return supabase
 }
-function imagePath(path: string | null) {
-  return path ? requireSupabase().storage.from(bucket).getPublicUrl(path).data.publicUrl : undefined
+async function signedImageUrls(paths: Array<string | null>) {
+  const uniquePaths = Array.from(new Set(paths.filter((path): path is string => Boolean(path))))
+  if (!uniquePaths.length) return new Map<string, string>()
+  const { data, error } = await requireSupabase().storage.from(bucket).createSignedUrls(uniquePaths, 60 * 60 * 24)
+  if (error) throw error
+  const urls = new Map<string, string>()
+  for (const item of data) {
+    if (item.path && item.signedUrl) urls.set(item.path, item.signedUrl)
+    else if (item.error) throw item.error
+  }
+  return urls
 }
 function slug(value: string) {
   return value.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
@@ -164,11 +173,18 @@ export async function getCatalog(): Promise<{ maps: MapRecord[]; agents: Agent[]
   if (mapResult.error) throw mapResult.error
   if (agentResult.error) throw agentResult.error
   if (abilityResult.error) throw abilityResult.error
-  const maps = (mapResult.data as MapRow[]).map((row) => ({ id: row.id, name: row.name, shortName: row.short_name, imageUrl: imagePath(row.image_path) }))
+  const mapRows = mapResult.data as MapRow[]
+  const agentRows = agentResult.data as AgentRow[]
   const abilities = abilityResult.data as AbilityRow[]
-  const agents = (agentResult.data as AgentRow[]).map((row) => ({
-    id: row.id, name: row.name, role: row.role, portraitUrl: imagePath(row.portrait_path),
-    abilities: abilities.filter((ability) => ability.agent_id === row.id).map((ability): Ability => ({ id: ability.id, key: ability.key, name: ability.name, iconUrl: imagePath(ability.icon_path) })),
+  const signedUrls = await signedImageUrls([
+    ...mapRows.map((row) => row.image_path),
+    ...agentRows.map((row) => row.portrait_path),
+    ...abilities.map((ability) => ability.icon_path),
+  ])
+  const maps = mapRows.map((row) => ({ id: row.id, name: row.name, shortName: row.short_name, imageUrl: row.image_path ? signedUrls.get(row.image_path) : undefined }))
+  const agents = agentRows.map((row) => ({
+    id: row.id, name: row.name, role: row.role, portraitUrl: row.portrait_path ? signedUrls.get(row.portrait_path) : undefined,
+    abilities: abilities.filter((ability) => ability.agent_id === row.id).map((ability): Ability => ({ id: ability.id, key: ability.key, name: ability.name, iconUrl: ability.icon_path ? signedUrls.get(ability.icon_path) : undefined })),
   }))
   return { maps, agents }
 }
