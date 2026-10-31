@@ -189,12 +189,33 @@ export async function getCatalog(): Promise<{ maps: MapRecord[]; agents: Agent[]
   return { maps, agents }
 }
 
-export async function createMap(input: { name: string; shortName: string; image: File }) {
+export async function createMap(input: { name: string; shortName: string; image?: File }) {
   const client = requireSupabase()
   const id = slug(input.shortName)
   if (!id) throw new Error('地圖代碼請使用英文或數字，例如 LOTUS')
-  const image_path = await uploadImage(input.image, `maps/${id}`)
+  const image_path = input.image ? await uploadImage(input.image, `maps/${id}`) : null
   const { error } = await client.from('maps').insert({ id, name: input.name.trim(), short_name: input.shortName.trim().toUpperCase(), image_path })
+  if (error) throw error
+}
+
+export async function updateMapName(id: string, name: string) {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('地圖名稱不可空白')
+  const { error } = await requireSupabase().from('maps').update({ name: trimmed }).eq('id', id)
+  if (error) throw error
+}
+
+export async function updateAgentName(id: string, name: string) {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('特務名稱不可空白')
+  const { error } = await requireSupabase().from('agents').update({ name: trimmed }).eq('id', id)
+  if (error) throw error
+}
+
+export async function updateAbilityName(id: string, name: string) {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('技能名稱不可空白')
+  const { error } = await requireSupabase().from('abilities').update({ name: trimmed }).eq('id', id)
   if (error) throw error
 }
 
