@@ -1,0 +1,79 @@
+LINEUP 點位資料庫｜架設與設定備忘
+========================================
+
+專案資料夾
+E:\文件\ChatGPT\valorant 手機app 點位查詢
+
+GitHub Repository
+https://github.com/ian900109/valorant-lineup-web-app
+
+Supabase Project URL
+https://gajwllsafmhtedmucalk.supabase.co
+
+安全提醒
+- Publishable key 可以放在前端設定，但不要把 secret key 或 service_role key 放進網頁、GitHub 或聊天訊息。
+- 本機的 .env.local 已被 .gitignore 排除，不要移除這項排除設定，也不要把 .env.local 加入 Git。
+- GitHub Pages 的 Actions Variables 可設定 VITE_SUPABASE_URL 和 VITE_SUPABASE_PUBLISHABLE_KEY。Publishable key 本身不是密碼，資料庫安全仍依賴 Supabase RLS 權限政策。
+
+目前資料庫狀態（2026-10-31）
+- Supabase 專案已建立，Project URL 與 Publishable key 已寫入本機 .env.local。
+- 已建立資料表：maps、agents、abilities、lineups、admin_users。
+- 已有 4 張地圖、6 位特務、24 個技能。
+- lineups 目前是空表；管理員新增點位後會出現資料。
+- Storage bucket 名稱：lineup-assets。
+- 初始資料與資料表是從 Supabase SQL Editor 手動執行 migration 建立的。
+- 因為 migration 曾在 SQL Editor 手動執行，啟用 Supabase GitHub Integration 的正式自動部署前，先確認 migration history 已與 GitHub 檔案同步。不要直接重跑初始 migration；其中的 create policy 不適合重複執行。
+
+本機啟動網站
+1. 安裝 Node.js 22 或更新版本。
+2. 開啟 PowerShell，切換到本專案資料夾：
+   cd 'E:\文件\ChatGPT\valorant 手機app 點位查詢'
+3. 安裝套件（第一次或 package-lock.json 更新後執行）：
+   npm install
+4. 啟動開發伺服器：
+   npm run dev
+5. 開啟終端機顯示的網址，通常是 http://localhost:5173/ 。關閉終端機或停止伺服器後，本機預覽就會停止。
+
+本機 Supabase 環境設定
+1. 在專案根目錄建立 .env.local（此檔不會上傳 GitHub）。
+2. 放入以下格式，key 從 Supabase Dashboard 的 Connect 或 Project Settings → API Keys 取得：
+   VITE_SUPABASE_URL=https://你的專案代碼.supabase.co
+   VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+3. 修改 .env.local 後，重新啟動 npm run dev。
+
+管理員帳號設定
+1. Supabase Dashboard → Authentication → Users，新增 Email／密碼使用者。
+2. 複製該使用者的 User ID。
+3. 到 SQL Editor 執行以下 SQL，將該使用者加入管理員名單：
+   insert into public.admin_users (user_id)
+   values ('貼上使用者的 User ID')
+   on conflict (user_id) do nothing;
+4. 回到網站重新整理，使用該 Email 和密碼登入管理員。
+5. 管理員權限由 admin_users 表決定；只建立 Auth 使用者、不加入此表，仍不能管理點位。
+
+Supabase GUI 查看資料
+- Table Editor：瀏覽 maps、agents、abilities、lineups、admin_users 表和資料。
+- Storage → lineup-assets：查看已上傳的地圖素材或影片。
+- SQL Editor：執行或檢查 SQL。已成功執行過的 migration 不要重複執行。
+- Authentication → Users：管理登入帳號及查看 User ID。
+
+GitHub Pages 發布網站
+1. 將專案程式碼推送到 GitHub repository 的 main 分支。
+2. GitHub Repository → Settings → Pages。
+3. Build and deployment 的 Source 選 GitHub Actions。
+4. Settings → Secrets and variables → Actions → Variables，新增：
+   VITE_SUPABASE_URL = Supabase Project URL
+   VITE_SUPABASE_PUBLISHABLE_KEY = Supabase Publishable key
+5. 每次推送到 main，.github/workflows/deploy-pages.yml 會自動建置並發布網站。
+6. Pages 網址可在 Settings → Pages 查看。發布後，不必讓自己的電腦持續開著 npm run dev。
+
+Supabase GitHub Integration（資料庫部署）
+- 這和 GitHub Pages 是兩套不同的整合：Pages 發布網站；Supabase Integration 部署資料庫 migrations／函式。
+- 若設定 Supabase GitHub Integration，repository 選 valorant-lineup-web-app，Working directory 設為 .，production branch 為 main。
+- 目前初始 migration 是在 SQL Editor 手動執行，尚未確認 Supabase migration history 是否記錄這些檔案。先不要開啟自動正式部署或把 migration 重複推送到 production；先整理 migration history，再採用之後新增 migration 的自動部署。
+
+目前功能與限制
+- 有 Supabase 設定時，網站讀取／新增點位使用 Supabase，管理員登入使用 Supabase Auth，影片上傳至 lineup-assets。
+- 沒有 Supabase 設定時會切回本機示範資料；本機示範新增的資料只留在該瀏覽器。
+- 地圖底圖仍是示意圖，不可當成遊戲中的精確平面圖。
+- Supabase Tables 目前含參考目錄資料，lineups 待管理員新增。

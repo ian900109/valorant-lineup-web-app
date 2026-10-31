@@ -14,10 +14,10 @@ Demo admin login: `admin` / `lineup123`. This is intentionally a local-only demo
 
 1. Copy `.env.example` to `.env.local`.
 2. Add the project URL and **publishable** key from the Supabase dashboard.
-3. Apply `supabase/migrations/202610310001_initial_schema.sql` in the Supabase SQL editor.
-4. Create your user through Supabase Auth, then add that user's UUID to `public.admin_users` from the SQL editor. Do not expose a secret/service-role key in browser code.
+3. Apply migrations in timestamp order: `202610310001_initial_schema.sql`, then `202611010001_seed_catalog.sql`. With Supabase GitHub Integration, set working directory to `.` and production branch to `main`; otherwise paste each migration into SQL Editor and run once.
+4. Create your email/password user in Supabase Authentication. Add that user's UUID to `public.admin_users` from SQL Editor with `insert into public.admin_users (user_id) values ('USER-UUID-HERE');`. Never expose a secret/service-role key in browser code.
 
-The migration creates map, agent, ability, lineup, and admin tables, row-level policies, and a public-read / admin-write `lineup-assets` bucket. The UI currently uses the local demo repository; `src/lib/supabase.ts` is the configured client boundary to use when the cloud repository is implemented.
+The initial migration creates tables, row-level policies, and a public-read / admin-write `lineup-assets` bucket. The catalog seed migration inserts maps, agents, and abilities. When environment variables are present, the app reads and writes lineups through Supabase, authenticates admins through Supabase Auth, and uploads videos to Storage. Without variables, it stays in local demo mode.
 
 ## Publish with GitHub Pages
 

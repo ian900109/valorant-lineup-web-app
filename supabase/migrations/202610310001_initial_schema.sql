@@ -66,20 +66,33 @@ alter table public.abilities enable row level security;
 alter table public.lineups enable row level security;
 alter table public.admin_users enable row level security;
 
+drop policy if exists "Public can read maps" on public.maps;
+drop policy if exists "Admins manage maps" on public.maps;
 create policy "Public can read maps" on public.maps for select using (true);
 create policy "Admins manage maps" on public.maps for all to authenticated using (public.is_lineup_admin()) with check (public.is_lineup_admin());
+drop policy if exists "Public can read agents" on public.agents;
+drop policy if exists "Admins manage agents" on public.agents;
 create policy "Public can read agents" on public.agents for select using (true);
 create policy "Admins manage agents" on public.agents for all to authenticated using (public.is_lineup_admin()) with check (public.is_lineup_admin());
+drop policy if exists "Public can read abilities" on public.abilities;
+drop policy if exists "Admins manage abilities" on public.abilities;
 create policy "Public can read abilities" on public.abilities for select using (true);
 create policy "Admins manage abilities" on public.abilities for all to authenticated using (public.is_lineup_admin()) with check (public.is_lineup_admin());
+drop policy if exists "Public can read lineups" on public.lineups;
+drop policy if exists "Admins manage lineups" on public.lineups;
 create policy "Public can read lineups" on public.lineups for select using (true);
 create policy "Admins manage lineups" on public.lineups for all to authenticated using (public.is_lineup_admin()) with check (public.is_lineup_admin());
+drop policy if exists "Admins can read admin list" on public.admin_users;
 create policy "Admins can read admin list" on public.admin_users for select to authenticated using (public.is_lineup_admin());
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('lineup-assets', 'lineup-assets', true, 52428800, array['image/png','image/jpeg','image/webp','video/mp4','video/webm','video/quicktime'])
 on conflict (id) do nothing;
 
+drop policy if exists "Anyone can read lineup assets" on storage.objects;
+drop policy if exists "Admins upload lineup assets" on storage.objects;
+drop policy if exists "Admins update lineup assets" on storage.objects;
+drop policy if exists "Admins delete lineup assets" on storage.objects;
 create policy "Anyone can read lineup assets" on storage.objects for select using (bucket_id = 'lineup-assets');
 create policy "Admins upload lineup assets" on storage.objects for insert to authenticated with check (bucket_id = 'lineup-assets' and public.is_lineup_admin());
 create policy "Admins update lineup assets" on storage.objects for update to authenticated using (bucket_id = 'lineup-assets' and public.is_lineup_admin()) with check (bucket_id = 'lineup-assets' and public.is_lineup_admin());
