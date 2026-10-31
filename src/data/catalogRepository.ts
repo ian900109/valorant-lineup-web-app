@@ -5,6 +5,8 @@ type MapRow = { id: string; name: string; short_name: string; image_path: string
 type AgentRow = { id: string; name: string; role: string; portrait_path: string | null }
 type AbilityRow = { id: string; agent_id: string; key: string; name: string; icon_path: string | null }
 const bucket = 'lineup-assets'
+const roleNames: Record<string, string> = { Duelist: '決鬥者', Initiator: '先鋒', Controller: '控場者', Sentinel: '守衛' }
+const abilityKeys: Record<string, string> = { Ability1: 'Q', Ability2: 'E', Grenade: 'C', Ultimate: 'X' }
 
 function requireSupabase() {
   if (!supabase) throw new Error('Supabase 尚未設定')
@@ -25,6 +27,126 @@ async function uploadImage(file: File, folder: string) {
   const { error } = await client.storage.from(bucket).upload(path, file, { contentType: file.type, upsert: false })
   if (error) throw error
   return path
+}
+
+async function storeCatalogImage(file: File, path: string) {
+  const client = requireSupabase()
+  if (!file.type.startsWith('image/')) throw new Error('素材來源不是圖片')
+  if (file.size > 15 * 1024 * 1024) throw new Error('圖片請小於 15 MB')
+  const { error } = await client.storage.from(bucket).upload(path, file, { contentType: file.type, upsert: true })
+  if (error) throw error
+  return path
+}
+
+async function fetchCatalogImage(url: string, name: string) {
+  const source = new URL(url)
+  if (source.hostname !== 'media.valorant-api.com') throw new Error('素材來源網域不符，已停止匯入')
+  const response = await fetch(source)
+  if (!response.ok) throw new Error(`下載圖片失敗：${name}（${response.status}）`)
+  const blob = await response.blob()
+  return new File([blob], `${name}.png`, { type: blob.type || 'image/png' })
+}
+
+type ApiMap = { displayName: string; mapUrl: string; displayIcon: string | null }
+type ApiAbility = { slot: string; displayName: string; displayIcon: string | null }
+type ApiAgent = { displayName: string; displayIcon: string | null; role: { displayName: string } | null; abilities: ApiAbility[]; isPlayableCharacter: boolean }
+
+export async function importAllCatalogAssets(onProgress: (message: string) => void) {
+  const client = requireSupabase()
+  onProgress('正在讀取 VALORANT 地圖與特務目錄…')
+  const [mapsResponse, agentsResponse] = await Promise.all([
+    fetch('https://valorant-api.com/v1/maps?language=zh-TW'),
+    fetch('https://valorant-api.com/v1/agents?isPlayableCharacter=true&language=zh-TW'),
+  ])
+  if (!mapsResponse.ok || !agentsResponse.ok) throw new Error('VALORANT 素材目錄暫時無法連線，請稍後再試')
+  const [mapPayload, agentPayload] = await Promise.all([mapsResponse.json(), agentsResponse.json()]) as [{ data: ApiMap[] }, { data: ApiAgent[] }]
+  const maps = mapPayload.data.filter((map) => map.mapUrl && map.displayIcon)
+  const agents = agentPayload.data.filter((agent) => agent.isPlayableCharacter && agent.displayIcon)
+  const [{ data: existingMaps, error: mapReadError }, { data: existingAgents, error: agentReadError }, { data: existingAbilities, error: abilityReadError }] = await Promise.all([
+    client.from('maps').select('id'),
+    client.from('agents').select('id'),
+    client.from('abilities').select('id,agent_id,key'),
+  ])
+  if (mapReadError) throw mapReadError
+  if (agentReadError) throw agentReadError
+  if (abilityReadError) throw abilityReadError
+
+  const knownMapIds = new Set((existingMaps as Array<{ id: string }>).map((row) => row.id))
+  const knownAgents = new Set((existingAgents as Array<{ id: string }>).map((row) => row.id))
+  const knownAbilities = new Map((existingAbilities as Array<{ id: string; agent_id: string; key: string }>).map((row) => [`${row.agent_id}:${row.key}`, row.id]))
+  const items: Array<{ kind: 'map'; value: ApiMap } | { kind: 'agent'; value: ApiAgent }> = [
+    ...maps.map((value) => ({ kind: 'map' as const, value })),
+    ...agents.map((value) => ({ kind: 'agent' as const, value })),
+  ]
+  const result = { maps: maps.length, agents: agents.length, abilities: 0 }
+  let completed = 0
+  const failures: string[] = []
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const item = items[next++]
+      try {
+        if (item.kind === 'map') {
+          const routeName = item.value.mapUrl.split('/').filter(Boolean).pop() || item.value.displayName
+          const id = slug(routeName)
+          if (!id) throw new Error(`${item.value.displayName} 地圖代碼無法識別`)
+          const image = await fetchCatalogImage(item.value.displayIcon!, `map-${id}`)
+          const image_path = await storeCatalogImage(image, `catalog/maps/${id}.png`)
+          const { error } = knownMapIds.has(id)
+            ? await client.from('maps').update({ image_path }).eq('id', id)
+            : await client.from('maps').insert({ id, name: item.value.displayName, short_name: id.toUpperCase(), image_path })
+          if (error) throw error
+          knownMapIds.add(id)
+        } else {
+          const id = slug(item.value.displayName)
+          if (!id) throw new Error(`${item.value.displayName} 特務代碼無法識別`)
+          const image = await fetchCatalogImage(item.value.displayIcon!, `agent-${id}`)
+          const portrait_path = await storeCatalogImage(image, `catalog/agents/${id}/portrait.png`)
+          const abilities = item.value.abilities
+            .filter((ability) => abilityKeys[ability.slot] && ability.displayIcon)
+            .map((ability) => ({ key: abilityKeys[ability.slot], name: ability.displayName, url: ability.displayIcon! }))
+            .sort((left, right) => ['Q', 'E', 'C', 'X'].indexOf(left.key) - ['Q', 'E', 'C', 'X'].indexOf(right.key))
+          if (abilities.length !== 4) throw new Error(`${item.value.displayName} 的四個技能圖示不完整`)
+          const role = roleNames[item.value.role?.displayName ?? ''] ?? item.value.role?.displayName ?? '特務'
+          const abilityRows = await Promise.all(abilities.map(async (ability) => {
+            const abilityId = knownAbilities.get(`${id}:${ability.key}`) ?? `${id}-${ability.key.toLowerCase()}`
+            const file = await fetchCatalogImage(ability.url, `agent-${id}-${ability.key.toLowerCase()}`)
+            const icon_path = await storeCatalogImage(file, `catalog/agents/${id}/abilities/${ability.key.toLowerCase()}.png`)
+            return { id: abilityId, agent_id: id, key: ability.key, name: ability.name, icon_path }
+          }))
+          if (knownAgents.has(id)) {
+            const { error } = await client.from('agents').update({ portrait_path, role }).eq('id', id)
+            if (error) throw error
+            for (const ability of abilityRows) {
+              if (knownAbilities.has(`${id}:${ability.key}`)) {
+                const { error: updateError } = await client.from('abilities').update({ name: ability.name, icon_path: ability.icon_path }).eq('id', ability.id)
+                if (updateError) throw updateError
+              } else {
+                const { error: insertError } = await client.from('abilities').insert(ability)
+                if (insertError) throw insertError
+                knownAbilities.set(`${id}:${ability.key}`, ability.id)
+              }
+            }
+          } else {
+            const { error: agentInsertError } = await client.from('agents').insert({ id, name: item.value.displayName, role, portrait_path })
+            if (agentInsertError) throw agentInsertError
+            const { error: abilityInsertError } = await client.from('abilities').insert(abilityRows)
+            if (abilityInsertError) { await client.from('agents').delete().eq('id', id); throw abilityInsertError }
+            knownAgents.add(id)
+            for (const ability of abilityRows) knownAbilities.set(`${id}:${ability.key}`, ability.id)
+          }
+          result.abilities += abilityRows.length
+        }
+      } catch (error) {
+        failures.push(`${item.value.displayName}: ${error instanceof Error ? error.message : '匯入失敗'}`)
+      }
+      completed++
+      onProgress(`同步素材 ${completed}/${items.length}：${item.value.displayName}`)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(3, items.length) }, () => worker()))
+  if (failures.length) throw new Error(`${items.length - failures.length}/${items.length} 項完成；${failures.slice(0, 3).join('；')}${failures.length > 3 ? `；另有 ${failures.length - 3} 項失敗` : ''}`)
+  return result
 }
 
 export async function getCatalog(): Promise<{ maps: MapRecord[]; agents: Agent[] }> {
