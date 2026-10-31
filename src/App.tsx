@@ -33,7 +33,7 @@ export default function App() {
   const [videoOpen, setVideoOpen] = useState(false)
   const stageRef = useRef<HTMLDivElement>(null)
   const worldRef = useRef<HTMLDivElement>(null)
-  const pointerRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
+  const pointerRef = useRef<{ x: number; y: number; panX: number; panY: number; moved: boolean } | null>(null)
   const agent = agentCatalog.find((item) => item.id === agentId) ?? agentCatalog[0] ?? defaultAgents[0]
   const selectedMap = mapCatalog.find((item) => item.id === mapId) ?? mapCatalog[0] ?? defaultMaps[0]
 
@@ -71,6 +71,9 @@ export default function App() {
   }
   function onMapPointerUp(event: React.PointerEvent) {
     if (pick) {
+      const wasDragging = pointerRef.current?.moved ?? false
+      pointerRef.current = null
+      if (wasDragging || (event.target as HTMLElement).closest('button,.map-note,.map-legend,.pick-prompt')) return
       const p = pointFromEvent(event)
       if (!p) return
       if (pick === 'start') setStart(p); else setImpact(p)
@@ -78,7 +81,7 @@ export default function App() {
     }
     pointerRef.current = null
   }
-  function startPicking(which: 'start' | 'impact') { setPick(which); setModal(null) }
+  function startPicking(which: 'start' | 'impact') { setPick(which) }
   async function submitLineup(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!start || !impact) { notify('請先在地圖上設定起始位置與生效位置'); return }
@@ -110,11 +113,11 @@ export default function App() {
   }
   function zoomBy(delta: number) { const next = Math.max(1, Math.min(3, zoom + delta)); setZoom(next); if (next === 1) setPan({ x: 0, y: 0 }) }
   function onPointerDown(event: React.PointerEvent) {
-    if (pick || zoom === 1 || (event.target as HTMLElement).closest('button')) return
-    pointerRef.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y }
+    if (zoom === 1 || (event.target as HTMLElement).closest('button')) return
+    pointerRef.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y, moved: false }
     stageRef.current?.setPointerCapture(event.pointerId)
   }
-  function onPointerMove(event: React.PointerEvent) { if (pointerRef.current) setPan({ x: pointerRef.current.panX + event.clientX - pointerRef.current.x, y: pointerRef.current.panY + event.clientY - pointerRef.current.y }) }
+  function onPointerMove(event: React.PointerEvent) { if (pointerRef.current) { const dx = event.clientX - pointerRef.current.x; const dy = event.clientY - pointerRef.current.y; if (Math.abs(dx) + Math.abs(dy) > 4) pointerRef.current.moved = true; setPan({ x: pointerRef.current.panX + dx, y: pointerRef.current.panY + dy }) } }
   function selectAbility(id: string) { setAbilityId(abilityId === id ? null : id); setSelected(null) }
 
   return <div className="app-shell">
@@ -140,7 +143,7 @@ export default function App() {
         </aside></section>
       {selected && <section className="detail-panel"><div className="detail-title"><div><div className="eyebrow">{mapCatalog.find((map) => map.id === selected.mapId)?.shortName} · {selected.side}</div><h2>{selected.title}</h2></div><button className="close-text" onClick={() => setSelected(null)}>收起</button></div><div className="detail-route"><span className="pin start-pin">S</span><div><small>起始位置座標</small><b>{formatPoint(selected.start)}</b></div><span className="route-arrow">→</span><span className="pin target-pin"><Crosshair size={15} /></span><div><small>生效位置座標</small><b>{formatPoint(selected.impact)}</b></div></div><p>{selected.instructions}</p>{videoOpen && (selected.videoUrl ? <div className="video-box">{isDirectVideo(selected.videoUrl) ? <video src={selected.videoUrl} controls playsInline /> : <iframe src={embedUrl(selected.videoUrl)} title="點位影片" allowFullScreen />}</div> : <div className="video-placeholder">這筆示範資料尚未附影片。</div>)}<button className="primary" onClick={() => setVideoOpen(true)}><Play size={15} /> 查看教學影片</button></section>}
       <footer>LINEUP DATABASE · 示範模式資料只儲存在目前瀏覽器</footer></> : <section className="catalog-page"><div className="page-heading"><div><div className="eyebrow">CONTENT CATALOG</div><h1>{page === 'maps' ? '地圖管理' : '特務管理'}</h1><p>{page === 'maps' ? '檢視平面圖，管理員可新增地圖或更新地圖圖片。' : '檢視特務與技能圖示，管理員可新增特務或更新素材。'}</p></div>{!admin && <button className="outline" onClick={() => setModal('login')}>管理員登入以編輯</button>}</div><CatalogManager key={page} section={page} maps={mapCatalog} agents={agentCatalog} admin={admin} onRefresh={refreshCatalog} notify={notify} /></section>}</main>
-    {modal && <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setModal(null) }}><section className="modal"><div className="modal-head"><div><div className="eyebrow">{modal === 'login' ? 'ADMIN ACCESS' : 'CONTENT MANAGEMENT'}</div><h2>{modal === 'login' ? '管理員登入' : '新增點位'}</h2></div><button className="modal-close" onClick={() => setModal(null)}>×</button></div>
+    {modal && <div className={`modal-backdrop ${pick && modal === 'create' ? 'picking-map' : ''}`} onMouseDown={(e) => { if (e.target === e.currentTarget) setModal(null) }}><section className="modal"><div className="modal-head"><div><div className="eyebrow">{modal === 'login' ? 'ADMIN ACCESS' : 'CONTENT MANAGEMENT'}</div><h2>{modal === 'login' ? '管理員登入' : '新增點位'}</h2></div><button className="modal-close" onClick={() => setModal(null)}>×</button></div>
       {modal === 'login' ? <form className="form-stack" onSubmit={async (e) => { e.preventDefault(); const data = new FormData(e.currentTarget); if (supabase) { const { data: result, error } = await supabase.auth.signInWithPassword({ email: String(data.get('email')), password: String(data.get('password')) }); if (error) { notify(`登入失敗：${error.message}`); return } const allowed = await verifyAdmin(result.user.id); if (allowed) { setModal(null); notify('Supabase 管理員登入成功') } else { await supabase.auth.signOut(); notify('帳號已登入，但尚未加入管理員名單') } } else if (data.get('email') === 'admin' && data.get('password') === 'lineup123') { setAdmin(true); setModal(null); notify('已進入示範管理員模式') } else notify('示範帳密錯誤：admin / lineup123') }}><label>{supabase ? '管理員 Email' : '示範帳號'}<input name="email" type={supabase ? 'email' : 'text'} defaultValue={supabase ? '' : 'admin'} required /></label><label>密碼<input name="password" type="password" required /></label><button className="primary" type="submit"><ShieldCheck size={15} /> {supabase ? '使用 Supabase 登入' : '登入示範管理介面'}</button><small className="form-help">{supabase ? '先在 Supabase Authentication 建立帳號，並將使用者加入 admin_users。' : '示範帳密：admin / lineup123'}</small></form> : <form className="form-stack" onSubmit={submitLineup}><label>地圖<select value={mapId} onChange={(e) => chooseMap(e.target.value)}>{mapCatalog.map((item) => <option key={item.id} value={item.id}>{item.shortName} · {item.name}</option>)}</select></label><label>特務<select value={agentId} onChange={(e) => { setAgentId(e.target.value); setAbilityId(null) }}>{agentCatalog.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>技能<select name="abilityId" key={agentId} defaultValue={agent.abilities[0].id}>{agent.abilities.map((item) => <option key={item.id} value={item.id}>{item.key} · {item.name}</option>)}</select></label><div className="two-fields"><label>攻守<select name="side"><option>進攻</option><option>防守</option></select></label><label>點位標題<input name="title" required placeholder="例如：A 天堂燃燒彈" /></label></div><label>操作說明<textarea name="instructions" rows={3} /></label><label>影片網址<input name="videoUrl" type="url" placeholder="YouTube 或影片網址" /></label><label>影片檔（Supabase Storage）<input name="videoFile" type="file" accept="video/*" /></label><div className="coord-row"><span>起始點：{start ? formatPoint(start) : '尚未在地圖點選'}</span><button type="button" className="outline" onClick={() => startPicking('start')}>在地圖點起始位置</button></div><div className="coord-row"><span>生效點：{impact ? formatPoint(impact) : '尚未在地圖點選'}</span><button type="button" className="outline" onClick={() => startPicking('impact')}>在地圖點生效位置</button></div><button className="primary" type="submit"><Plus size={15} /> 儲存點位</button></form>}
     </section></div>}
     {notice && <div className="toast">{notice}</div>}
