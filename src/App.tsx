@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Crosshair, MapPin, Play, Plus, RotateCcw, Search, ShieldCheck, ZoomIn, ZoomOut } from 'lucide-react'
+import { Crosshair, MapPin, Play, Plus, RotateCcw, Search, ShieldCheck, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
 import { agents, maps, seedLineups } from './data/seed'
 import { lineupRepository } from './data/lineupRepository'
 import { supabase } from './lib/supabase'
@@ -76,6 +76,16 @@ export default function App() {
       notify(supabase ? '點位已儲存至 Supabase' : '示範點位已儲存在這台裝置')
     } catch (error) { notify(`儲存失敗：${error instanceof Error ? error.message : '請確認資料表與權限設定'}`) }
   }
+  async function deleteLineup(item: Lineup) {
+    if (!admin) { notify('只有管理員可以刪除點位'); return }
+    if (!window.confirm(`確定刪除「${item.title}」？此操作無法復原。`)) return
+    try {
+      await lineupRepository.delete(item)
+      setLineups(await lineupRepository.list())
+      if (selected?.id === item.id) setSelected(null)
+      notify(supabase ? '點位已從 Supabase 刪除' : '示範點位已刪除')
+    } catch (error) { notify(`刪除失敗：${error instanceof Error ? error.message : '請確認管理員權限'}`) }
+  }
   function zoomBy(delta: number) { const next = Math.max(1, Math.min(3, zoom + delta)); setZoom(next); if (next === 1) setPan({ x: 0, y: 0 }) }
   function onPointerDown(event: React.PointerEvent) {
     if (pick || zoom === 1 || (event.target as HTMLElement).closest('button')) return
@@ -103,7 +113,7 @@ export default function App() {
         </div><div className="map-foot"><span>{maps.find((map) => map.id === mapId)?.shortName} · 戰術地圖</span><span>滾輪縮放 · 放大後拖曳移動</span></div></div>
         <aside className="side-card"><div className="side-heading"><div><b>LOADOUT</b><small>選擇特務與技能</small></div><button className="text-button" onClick={() => { setAbilityId(null); setSide('全部'); setQuery(''); setSelected(null) }}>重設</button></div>
           <div className="agent-summary"><span className="agent-big">{agent.name.slice(0, 1)}</span><div><b>{agent.name}</b><small>{agent.role}</small></div></div><div className="ability-grid">{agent.abilities.map((ability) => <button key={ability.id} className={`ability ${abilityId === ability.id ? 'chosen' : ''}`} title={ability.name} onClick={() => selectAbility(ability.id)}><span>{ability.key}</span><small>{ability.name}</small></button>)}</div>
-          <div className="section-label">AVAILABLE LINEUPS <span>({visible.length})</span></div><div className="spot-list">{visible.length ? visible.map((item) => <button className={`spot ${selected?.id === item.id ? 'active' : ''}`} key={item.id} onClick={() => { setSelected(item); setVideoOpen(false) }}><span className="spot-icon">{agent.abilities.find((ability) => ability.id === item.abilityId)?.key}</span><span className="spot-copy"><b>{item.title}</b><small>{item.side} · 起點 {item.startLabel}</small></span><span className="spot-arrow">›</span></button>) : <div className="empty">沒有符合條件的點位。<br />可以換技能，或新增一個示範點位。</div>}</div>
+          <div className="section-label">AVAILABLE LINEUPS <span>({visible.length})</span></div><div className="spot-list">{visible.length ? visible.map((item) => <div className="spot-row" key={item.id}><button className={`spot ${selected?.id === item.id ? 'active' : ''}`} onClick={() => { setSelected(item); setVideoOpen(false) }}><span className="spot-icon">{agent.abilities.find((ability) => ability.id === item.abilityId)?.key}</span><span className="spot-copy"><b>{item.title}</b><small>{item.side} · 起點 {formatPoint(item.start)}</small></span><span className="spot-arrow">›</span></button>{admin && <button className="spot-delete" title="刪除點位" aria-label={`刪除 ${item.title}`} onClick={() => void deleteLineup(item)}><Trash2 size={15} /></button>}</div>) : <div className="empty">沒有符合條件的點位。<br />可以換技能，或新增一個示範點位。</div>}</div>
           <div className="admin-entry"><button onClick={() => { if (admin) { setStart(null); setImpact(null); setModal('create') } else setModal('login') }}><Plus size={14} /> {admin ? '新增點位' : '管理員登入後新增點位'}</button></div>
         </aside></section>
       {selected && <section className="detail-panel"><div className="detail-title"><div><div className="eyebrow">{maps.find((map) => map.id === selected.mapId)?.shortName} · {selected.side}</div><h2>{selected.title}</h2></div><button className="close-text" onClick={() => setSelected(null)}>收起</button></div><div className="detail-route"><span className="pin start-pin">S</span><div><small>起始位置座標</small><b>{formatPoint(selected.start)}</b></div><span className="route-arrow">→</span><span className="pin target-pin"><Crosshair size={15} /></span><div><small>生效位置座標</small><b>{formatPoint(selected.impact)}</b></div></div><p>{selected.instructions}</p>{videoOpen && (selected.videoUrl ? <div className="video-box">{isDirectVideo(selected.videoUrl) ? <video src={selected.videoUrl} controls playsInline /> : <iframe src={embedUrl(selected.videoUrl)} title="點位影片" allowFullScreen />}</div> : <div className="video-placeholder">這筆示範資料尚未附影片。</div>)}<button className="primary" onClick={() => setVideoOpen(true)}><Play size={15} /> 查看教學影片</button></section>}

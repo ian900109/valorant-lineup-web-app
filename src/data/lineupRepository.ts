@@ -6,6 +6,7 @@ const STORAGE_KEY = 'lineup-demo-data-v2'
 export interface LineupRepository {
   list(): Promise<Lineup[]>
   save(lineup: Lineup, videoFile?: File): Promise<Lineup>
+  delete(lineup: Lineup): Promise<void>
 }
 
 export class LocalLineupRepository implements LineupRepository {
@@ -23,6 +24,11 @@ export class LocalLineupRepository implements LineupRepository {
     const saved = videoFile ? { ...lineup, videoUrl: URL.createObjectURL(videoFile) } : lineup
     localStorage.setItem(STORAGE_KEY, JSON.stringify([saved, ...current]))
     return saved
+  }
+
+  async delete(lineup: Lineup): Promise<void> {
+    const current = await this.list()
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(current.filter((item) => item.id !== lineup.id)))
   }
 }
 
@@ -63,6 +69,24 @@ export class SupabaseLineupRepository implements LineupRepository {
     if (error) throw error
     const row = data as DbLineup
     return { ...lineup, id: row.id, videoUrl: row.video_path ?? undefined, createdAt: row.created_at }
+  }
+
+  async delete(lineup: Lineup): Promise<void> {
+    if (!supabase) throw new Error('尚未設定 Supabase 連線')
+    const marker = '/storage/v1/object/public/lineup-assets/'
+    if (lineup.videoUrl) {
+      try {
+        const path = new URL(lineup.videoUrl).pathname.split(marker)[1]
+        if (path) {
+          const { error: storageError } = await supabase.storage.from('lineup-assets').remove([decodeURIComponent(path)])
+          if (storageError) throw storageError
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message !== 'Invalid URL') throw error
+      }
+    }
+    const { error } = await supabase.from('lineups').delete().eq('id', lineup.id)
+    if (error) throw error
   }
 }
 
