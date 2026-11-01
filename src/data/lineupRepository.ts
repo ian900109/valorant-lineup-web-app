@@ -34,7 +34,8 @@ export class LocalLineupRepository implements LineupRepository {
 
 type DbLineup = {
   id: string; map_id: string; agent_id: string; ability_id: string; title: string; site: string; start_label: string; side: '進攻' | '防守';
-  start_x: number; start_y: number; impact_x: number; impact_y: number; instructions: string; video_path: string | null; created_at: string
+  start_x: number; start_y: number; impact_x: number; impact_y: number; instructions: string; video_path: string | null;
+  video_mode: 'full' | 'clip' | null; video_start_seconds: number | null; video_end_seconds: number | null; created_at: string
 }
 
 function lineupAssetPath(value: string | null) {
@@ -69,7 +70,8 @@ export class SupabaseLineupRepository implements LineupRepository {
     return Promise.all((data as DbLineup[]).map(async (row) => ({
       id: row.id, mapId: row.map_id, agentId: row.agent_id, abilityId: row.ability_id, title: row.title, site: row.site,
       startLabel: row.start_label, side: row.side, start: { x: row.start_x, y: row.start_y }, impact: { x: row.impact_x, y: row.impact_y },
-      instructions: row.instructions, videoUrl: await lineupVideoUrl(row.video_path), createdAt: row.created_at,
+      instructions: row.instructions, videoUrl: await lineupVideoUrl(row.video_path), videoMode: row.video_mode ?? 'full',
+      videoStartSeconds: row.video_start_seconds ?? undefined, videoEndSeconds: row.video_end_seconds ?? undefined, createdAt: row.created_at,
     })))
   }
 
@@ -88,7 +90,10 @@ export class SupabaseLineupRepository implements LineupRepository {
       map_id: lineup.mapId, agent_id: lineup.agentId, ability_id: lineup.abilityId, title: lineup.title, site: lineup.site,
       start_label: lineup.startLabel, side: lineup.side, start_x: lineup.start.x, start_y: lineup.start.y,
       impact_x: lineup.impact.x, impact_y: lineup.impact.y, instructions: lineup.instructions,
-      video_path: videoPath, created_by: userResult.user?.id,
+      video_path: videoPath, video_mode: lineup.videoMode ?? 'full',
+      video_start_seconds: lineup.videoMode === 'clip' ? lineup.videoStartSeconds ?? null : null,
+      video_end_seconds: lineup.videoMode === 'clip' ? lineup.videoEndSeconds ?? null : null,
+      created_by: userResult.user?.id,
     }).select('*').single()
     if (error) throw error
     const row = data as DbLineup

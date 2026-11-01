@@ -14,5 +14,8 @@ export type Lineup = {
   impact: { x: number; y: number }
   instructions: string
   videoUrl?: string
+  videoMode?: 'full' | 'clip'
+  videoStartSeconds?: number
+  videoEndSeconds?: number
   createdAt: string
 }
