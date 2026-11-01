@@ -130,7 +130,7 @@ export default function App() {
     }
     pointerRef.current = null
   }
-  function startPicking(which: 'start' | 'impact') { setPick(which) }
+  function startPicking(which: 'start' | 'impact') { setMarkerChoices(null); setPick(which) }
   function startCreatingLineup() {
     setEditingLineup(null); setMapId(selectedMap.id); setAgentId(agent.id); setStart(null); setImpact(null)
     setVideoMode('full'); setModal('create')
