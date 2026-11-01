@@ -5,7 +5,8 @@ import { supabase } from '../lib/supabase'
 const STORAGE_KEY = 'lineup-demo-data-v2'
 export interface LineupRepository {
   list(): Promise<Lineup[]>
-  save(lineup: Lineup, videoFile?: File): Promise<Lineup>
+  save(lineup: Lineup, videoFile?: File, onStatus?: (message: string) => void): Promise<Lineup>
+  update(lineup: Lineup, videoFile?: File, onStatus?: (message: string) => void): Promise<Lineup>
   delete(lineup: Lineup): Promise<void>
 }
 
@@ -23,6 +24,13 @@ export class LocalLineupRepository implements LineupRepository {
     const current = await this.list()
     const saved = videoFile ? { ...lineup, videoUrl: URL.createObjectURL(videoFile) } : lineup
     localStorage.setItem(STORAGE_KEY, JSON.stringify([saved, ...current]))
+    return saved
+  }
+
+  async update(lineup: Lineup, videoFile?: File): Promise<Lineup> {
+    const current = await this.list()
+    const saved = videoFile ? { ...lineup, videoUrl: URL.createObjectURL(videoFile) } : lineup
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(current.map((item) => item.id === lineup.id ? saved : item)))
     return saved
   }
 
@@ -75,16 +83,18 @@ export class SupabaseLineupRepository implements LineupRepository {
     })))
   }
 
-  async save(lineup: Lineup, videoFile?: File): Promise<Lineup> {
+  async save(lineup: Lineup, videoFile?: File, onStatus?: (message: string) => void): Promise<Lineup> {
     if (!supabase) throw new Error('尚未設定 Supabase 連線')
     let videoPath: string | null = lineup.videoUrl || null
     if (videoFile) {
+      onStatus?.('正在上傳影片…')
       const ext = videoFile.name.split('.').pop()?.toLowerCase() || 'mp4'
       const path = `lineups/${crypto.randomUUID()}.${ext}`
       const { error: uploadError } = await supabase.storage.from('lineup-assets').upload(path, videoFile, { contentType: videoFile.type, upsert: false })
       if (uploadError) throw uploadError
       videoPath = path
     }
+    onStatus?.('正在儲存點位內容…')
     const { data: userResult } = await supabase.auth.getUser()
     const { data, error } = await supabase.from('lineups').insert({
       map_id: lineup.mapId, agent_id: lineup.agentId, ability_id: lineup.abilityId, title: lineup.title, site: lineup.site,
@@ -98,6 +108,40 @@ export class SupabaseLineupRepository implements LineupRepository {
     if (error) throw error
     const row = data as DbLineup
     return { ...lineup, id: row.id, videoUrl: row.video_path ?? undefined, createdAt: row.created_at }
+  }
+
+  async update(lineup: Lineup, videoFile?: File, onStatus?: (message: string) => void): Promise<Lineup> {
+    if (!supabase) throw new Error('尚未設定 Supabase 連線')
+    const previousPath = lineupAssetPath(lineup.videoUrl ?? null)
+    let videoPath: string | null = previousPath ?? lineup.videoUrl ?? null
+    let uploadedPath: string | null = null
+    if (videoFile) {
+      onStatus?.('正在上傳影片…')
+      const ext = videoFile.name.split('.').pop()?.toLowerCase() || 'mp4'
+      uploadedPath = `lineups/${crypto.randomUUID()}.${ext}`
+      const { error: uploadError } = await supabase.storage.from('lineup-assets').upload(uploadedPath, videoFile, { contentType: videoFile.type, upsert: false })
+      if (uploadError) throw uploadError
+      videoPath = uploadedPath
+    }
+    onStatus?.('正在儲存點位內容…')
+    const { data, error } = await supabase.from('lineups').update({
+      map_id: lineup.mapId, agent_id: lineup.agentId, ability_id: lineup.abilityId, title: lineup.title, site: lineup.site,
+      start_label: lineup.startLabel, side: lineup.side, start_x: lineup.start.x, start_y: lineup.start.y,
+      impact_x: lineup.impact.x, impact_y: lineup.impact.y, instructions: lineup.instructions,
+      video_path: videoPath, video_mode: lineup.videoMode ?? 'full',
+      video_start_seconds: lineup.videoMode === 'clip' ? lineup.videoStartSeconds ?? null : null,
+      video_end_seconds: lineup.videoMode === 'clip' ? lineup.videoEndSeconds ?? null : null,
+    }).eq('id', lineup.id).select('*').single()
+    if (error) {
+      if (uploadedPath) await supabase.storage.from('lineup-assets').remove([uploadedPath])
+      throw error
+    }
+    if (previousPath && previousPath !== videoPath) {
+      const { error: removeError } = await supabase.storage.from('lineup-assets').remove([previousPath])
+      if (removeError) console.error('Could not remove replaced lineup video:', removeError)
+    }
+    const row = data as DbLineup
+    return { ...lineup, videoUrl: await lineupVideoUrl(row.video_path), createdAt: row.created_at }
   }
 
   async delete(lineup: Lineup): Promise<void> {

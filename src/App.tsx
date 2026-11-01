@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { Crosshair, MapPin, Play, Plus, RotateCcw, Search, ShieldCheck, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
+import { Crosshair, MapPin, Pencil, Play, Plus, RotateCcw, Search, ShieldCheck, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
 import { agents as defaultAgents, maps as defaultMaps, seedLineups } from './data/seed'
 import { lineupRepository } from './data/lineupRepository'
 import CatalogManager from './components/CatalogManager'
+import LineupEditor from './components/LineupEditor'
 import SiteAccessGate from './components/SiteAccessGate'
 import { getCatalog } from './data/catalogRepository'
 import { supabase } from './lib/supabase'
@@ -11,6 +12,7 @@ import type { Lineup } from './types'
 
 const bounds = (n: number) => Math.min(.98, Math.max(.02, n))
 const formatPoint = (point: { x: number; y: number }) => `X ${Math.round(point.x * 100)}% · Y ${Math.round(point.y * 100)}%`
+const formatTimestamp = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 
 export default function App() {
   const [lineups, setLineups] = useState<Lineup[]>([])
@@ -26,7 +28,7 @@ export default function App() {
   const [authReady, setAuthReady] = useState(!supabase)
   const [siteUnlocked, setSiteUnlocked] = useState(!supabase && !import.meta.env.PROD)
   const [accessSetupError, setAccessSetupError] = useState('')
-  const [modal, setModal] = useState<'login' | 'create' | null>(null)
+  const [modal, setModal] = useState<'login' | 'create' | 'edit' | null>(null)
   const [page, setPage] = useState<'database' | 'maps' | 'agents'>('database')
   const [pick, setPick] = useState<'start' | 'impact' | null>(null)
   const [start, setStart] = useState<{ x: number; y: number } | null>(null)
@@ -37,9 +39,14 @@ export default function App() {
   const [agentCatalog, setAgentCatalog] = useState(defaultAgents)
   const [videoOpen, setVideoOpen] = useState(false)
   const [videoMode, setVideoMode] = useState<'full' | 'clip'>('full')
+  const [editingLineup, setEditingLineup] = useState<Lineup | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState('正在儲存…')
+  const [markerChoices, setMarkerChoices] = useState<{ items: Lineup[]; point: { x: number; y: number } } | null>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const worldRef = useRef<HTMLDivElement>(null)
   const pointerRef = useRef<{ x: number; y: number; panX: number; panY: number; moved: boolean } | null>(null)
+  const savingRef = useRef(false)
   const agent = agentCatalog.find((item) => item.id === agentId) ?? agentCatalog[0] ?? defaultAgents[0]
   const selectedMap = mapCatalog.find((item) => item.id === mapId) ?? mapCatalog[0] ?? defaultMaps[0]
 
@@ -103,7 +110,7 @@ export default function App() {
     if (error) { notify(`無法確認管理員權限：${error.message}`); return false }
     setAdmin(Boolean(data)); return Boolean(data)
   }
-  function chooseMap(value: string) { setMapId(value); setSelected(null); setZoom(1); setPan({ x: 0, y: 0 }) }
+  function chooseMap(value: string) { setMapId(value); if (!editingLineup) setSelected(null); setMarkerChoices(null); setZoom(1); setPan({ x: 0, y: 0 }) }
   function pointFromEvent(event: React.PointerEvent) {
     const rect = worldRef.current!.getBoundingClientRect()
     const x = (event.clientX - rect.left) / rect.width
@@ -119,13 +126,34 @@ export default function App() {
       const p = pointFromEvent(event)
       if (!p) return
       if (pick === 'start') setStart(p); else setImpact(p)
-      setPick(null); setModal('create'); return
+      setPick(null); setModal((current) => current ?? 'create'); return
     }
     pointerRef.current = null
   }
   function startPicking(which: 'start' | 'impact') { setPick(which) }
+  function startCreatingLineup() {
+    setEditingLineup(null); setMapId(selectedMap.id); setAgentId(agent.id); setStart(null); setImpact(null)
+    setVideoMode('full'); setModal('create')
+  }
+  function startEditingLineup(item: Lineup) {
+    setEditingLineup(item); setMapId(item.mapId); setAgentId(item.agentId); setStart(item.start); setImpact(item.impact)
+    setVideoMode(item.videoMode ?? 'full'); setSelected(item); setVideoOpen(false); setModal('edit')
+  }
+  function selectMapMarker(item: Lineup, location: 'start' | 'impact') {
+    const rect = worldRef.current?.getBoundingClientRect()
+    const radius = 14 * markerScale
+    const overlapping = rect ? visible.filter((candidate) => {
+      const dx = (candidate[location].x - item[location].x) * rect.width
+      const dy = (candidate[location].y - item[location].y) * rect.height
+      return Math.hypot(dx, dy) <= radius
+    }) : [item]
+    if (overlapping.length > 1) setMarkerChoices({ items: overlapping, point: item[location] })
+    else { setMarkerChoices(null); setSelected(item); setVideoOpen(false) }
+  }
   async function submitLineup(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (savingRef.current) return
+    if (!admin) { notify('只有管理員可以儲存點位'); return }
     if (!start || !impact) { notify('請先在地圖上設定起始位置與生效位置'); return }
     const form = new FormData(event.currentTarget)
     const videoFile = form.get('videoFile')
@@ -135,12 +163,17 @@ export default function App() {
     if (videoMode === 'clip' && (videoStartSeconds === null || videoEndSeconds === null || videoEndSeconds <= videoStartSeconds)) {
       notify('指定播放請輸入有效的起訖時間，且結束時間要晚於開始時間（格式 mm:ss 或 hh:mm:ss）'); return
     }
-    const created: Lineup = { id: crypto.randomUUID(), mapId, agentId, abilityId: String(form.get('abilityId')), title: String(form.get('title')).trim(), site: formatPoint(impact), startLabel: formatPoint(start), side: String(form.get('side')) as Lineup['side'], start, impact, instructions: String(form.get('instructions')).trim(), videoUrl: String(form.get('videoUrl')).trim() || undefined, videoMode, videoStartSeconds: videoStartSeconds ?? undefined, videoEndSeconds: videoEndSeconds ?? undefined, createdAt: new Date().toISOString() }
+    const lineup: Lineup = { id: editingLineup?.id ?? crypto.randomUUID(), mapId, agentId, abilityId: String(form.get('abilityId')), title: String(form.get('title')).trim(), site: formatPoint(impact), startLabel: formatPoint(start), side: String(form.get('side')) as Lineup['side'], start, impact, instructions: String(form.get('instructions')).trim(), videoUrl: String(form.get('videoUrl')).trim() || undefined, videoMode, videoStartSeconds: videoStartSeconds ?? undefined, videoEndSeconds: videoEndSeconds ?? undefined, createdAt: editingLineup?.createdAt ?? new Date().toISOString() }
+    savingRef.current = true; setSaving(true); setSaveStatus(file ? '正在上傳影片…' : '正在儲存點位…')
     try {
-      const saved = await lineupRepository.save(created, file)
-      setLineups(await lineupRepository.list()); setSelected(saved); setModal(null); setStart(null); setImpact(null)
-      notify(supabase ? '點位已儲存至 Supabase' : '示範點位已儲存在這台裝置')
+      if (editingLineup) await lineupRepository.update(lineup, file, setSaveStatus)
+      else await lineupRepository.save(lineup, file, setSaveStatus)
+      const refreshed = await lineupRepository.list()
+      setLineups(refreshed); setSelected(refreshed.find((item) => item.id === lineup.id) ?? null)
+      setModal(null); setStart(null); setImpact(null); setEditingLineup(null); setMarkerChoices(null)
+      notify(editingLineup ? '點位已更新' : supabase ? '點位已儲存至 Supabase' : '示範點位已儲存在這台裝置')
     } catch (error) { notify(`儲存失敗：${error instanceof Error ? error.message : '請確認資料表與權限設定'}`) }
+    finally { savingRef.current = false; setSaving(false) }
   }
   async function deleteLineup(item: Lineup) {
     if (!admin) { notify('只有管理員可以刪除點位'); return }
@@ -180,23 +213,24 @@ export default function App() {
         <div className={`map-stage ${pick ? 'picking' : ''}`} ref={stageRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onMapPointerUp} onPointerCancel={() => { pointerRef.current = null }} onWheel={(e) => { e.preventDefault(); zoomBy(e.deltaY < 0 ? .12 : -.12) }}>
           <div ref={worldRef} className={`map-world ${selectedMap.imageUrl ? 'map-world-with-image' : ''}`} style={{ transform: selectedMap.imageUrl ? `translate(calc(-50% + ${pan.x}px),${pan.y}px) scale(${zoom})` : `translate(${pan.x}px,${pan.y}px) scale(${zoom})` }}><TacticalMap mapId={mapId} mapShortName={selectedMap.shortName} imageUrl={selectedMap.imageUrl} />
             <svg className="routes" viewBox="0 0 1000 620" preserveAspectRatio="none">{visible.map((item) => <line key={item.id} x1={item.start.x * 1000} y1={item.start.y * 620} x2={item.impact.x * 1000} y2={item.impact.y * 620} />)}</svg>
-            {visible.map((item) => <div key={`${item.id}-start`} className={`map-marker start ${selected?.id === item.id ? 'selected' : ''}`} style={{ left: `${item.start.x * 100}%`, top: `${item.start.y * 100}%`, transform: `translate(-50%, -50%) scale(${markerScale})` }} onPointerDown={(e) => e.stopPropagation()} onClick={() => { setSelected(item); setVideoOpen(false) }} title={`起始位置：${item.startLabel}`} aria-label={`起始位置：${item.startLabel}`}><span aria-hidden="true" /></div>)}
-            {visible.map((item) => <button key={`${item.id}-impact`} type="button" aria-label={`生效位置：${item.site}`} className={`map-marker impact ${selected?.id === item.id ? 'selected' : ''}`} style={{ left: `${item.impact.x * 100}%`, top: `${item.impact.y * 100}%`, transform: `translate(-50%, -50%) scale(${markerScale})` }} onPointerDown={(e) => e.stopPropagation()} onClick={() => { setSelected(item); setVideoOpen(false) }} title={`生效位置：${item.site}`}><span className="marker-crosshair" aria-hidden="true" /></button>)}
+            {visible.map((item) => <button type="button" key={`${item.id}-start`} className={`map-marker start ${selected?.id === item.id ? 'selected' : ''}`} style={{ left: `${item.start.x * 100}%`, top: `${item.start.y * 100}%`, transform: `translate(-50%, -50%) scale(${markerScale})` }} onPointerDown={(e) => e.stopPropagation()} onClick={() => selectMapMarker(item, 'start')} title={`起始位置：${item.startLabel}`} aria-label={`起始位置：${item.startLabel}`}><span aria-hidden="true" /></button>)}
+            {visible.map((item) => <button key={`${item.id}-impact`} type="button" aria-label={`生效位置：${item.site}`} className={`map-marker impact ${selected?.id === item.id ? 'selected' : ''}`} style={{ left: `${item.impact.x * 100}%`, top: `${item.impact.y * 100}%`, transform: `translate(-50%, -50%) scale(${markerScale})` }} onPointerDown={(e) => e.stopPropagation()} onClick={() => selectMapMarker(item, 'impact')} title={`生效位置：${item.site}`}><span className="marker-crosshair" aria-hidden="true" /></button>)}
+            {markerChoices && <div className="marker-choice-list" style={{ left: `${markerChoices.point.x * 100}%`, top: `${markerChoices.point.y * 100}%` }}><b>這裡有多個點位，請選擇</b>{markerChoices.items.map((item) => <button type="button" key={item.id} onPointerDown={(event) => event.stopPropagation()} onClick={() => { setSelected(item); setVideoOpen(false); setMarkerChoices(null) }}>{item.title}<small>{item.side} · {item.startLabel}</small></button>)}<button type="button" className="marker-choice-close" onClick={() => setMarkerChoices(null)}>取消</button></div>}
             {pick && <div className="pick-preview" style={{ left: `${(pick === 'start' ? start?.x : impact?.x) ? (pick === 'start' ? start!.x : impact!.x) * 100 : 50}%`, top: `${(pick === 'start' ? start?.y : impact?.y) ? (pick === 'start' ? start!.y : impact!.y) * 100 : 50}%` }} />}
           </div>
-          {pick && <div className="pick-prompt">請在地圖點選{pick === 'start' ? '起始位置' : '技能生效位置'} <button onClick={(e) => { e.stopPropagation(); setPick(null); setModal('create') }}>取消</button></div>}
+          {pick && <div className="pick-prompt">請在地圖點選{pick === 'start' ? '起始位置' : '技能生效位置'} <button onClick={(e) => { e.stopPropagation(); setPick(null) }}>取消</button></div>}
           <div className="map-note">{selectedMap.imageUrl ? '平面圖已載入 · 滾輪縮放可查看細節' : '目前顯示測試示意底圖'}</div><div className="zoom-controls"><button aria-label="縮小" onClick={() => zoomBy(-.25)}><ZoomOut size={16} /></button><span>{Math.round(zoom * 100)}%</span><button aria-label="放大" onClick={() => zoomBy(.25)}><ZoomIn size={16} /></button><button aria-label="重設" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}><RotateCcw size={15} /></button></div>
           <div className="map-legend"><span className="legend-start">S</span>起始位置 <span className="legend-impact"><MapPin size={12} /></span>生效位置</div>
         </div><div className="map-foot"><span>{selectedMap.shortName} · 戰術地圖</span><span>滾輪縮放 · 放大後拖曳移動</span></div></div>
         <aside className="side-card"><div className="side-heading"><div><b>LOADOUT</b><small>選擇特務與技能</small></div><button className="text-button" onClick={() => { setAbilityId(null); setSide('全部'); setQuery(''); setSelected(null) }}>重設</button></div>
           <div className="agent-summary"><span className="agent-big">{agent.portraitUrl ? <img src={agent.portraitUrl} alt="" /> : agent.name.slice(0, 1)}</span><div><b>{agent.name}</b><small>{agent.role}</small></div></div><div className="ability-grid">{agent.abilities.map((ability) => <button key={ability.id} className={`ability ${abilityId === ability.id ? 'chosen' : ''}`} title={ability.name} onClick={() => selectAbility(ability.id)}><span>{ability.iconUrl ? <img src={ability.iconUrl} alt="" /> : ability.key}</span><small>{ability.name}</small></button>)}</div>
           <div className="section-label">AVAILABLE LINEUPS <span>({visible.length})</span></div><div className="spot-list">{visible.length ? visible.map((item) => <div className="spot-row" key={item.id}><button className={`spot ${selected?.id === item.id ? 'active' : ''}`} onClick={() => { setSelected(item); setVideoOpen(false) }}><span className="spot-icon">{agent.abilities.find((ability) => ability.id === item.abilityId)?.key}</span><span className="spot-copy"><b>{item.title}</b><small>{item.side} · 起點 {formatPoint(item.start)}</small></span><span className="spot-arrow">›</span></button>{admin && <button className="spot-delete" title="刪除點位" aria-label={`刪除 ${item.title}`} onClick={() => void deleteLineup(item)}><Trash2 size={15} /></button>}</div>) : <div className="empty">沒有符合條件的點位。<br />可以換技能，或新增一個示範點位。</div>}</div>
-          <div className="admin-entry"><button onClick={() => { if (admin) { setStart(null); setImpact(null); setModal('create') } else setModal('login') }}><Plus size={14} /> {admin ? '新增點位' : '管理員登入後新增點位'}</button></div>
+          <div className="admin-entry"><button onClick={() => { if (admin) startCreatingLineup(); else setModal('login') }}><Plus size={14} /> {admin ? '新增點位' : '管理員登入後新增點位'}</button></div>
         </aside></section>
-      {selected && <section className="detail-panel"><div className="detail-title"><div><div className="eyebrow">{mapCatalog.find((map) => map.id === selected.mapId)?.shortName} · {selected.side}</div><h2>{selected.title}</h2></div><button className="close-text" onClick={() => setSelected(null)}>收起</button></div><div className="detail-route"><span className="pin start-pin">S</span><div><small>起始位置座標</small><b>{formatPoint(selected.start)}</b></div><span className="route-arrow">→</span><span className="pin target-pin"><Crosshair size={15} /></span><div><small>生效位置座標</small><b>{formatPoint(selected.impact)}</b></div></div><p>{selected.instructions}</p>{videoOpen && (selected.videoUrl ? <div className="video-box">{isDirectVideo(selected.videoUrl) ? <video key={selected.id} src={selected.videoUrl} controls playsInline autoPlay onLoadedMetadata={(event) => { if (selected.videoMode === 'clip') event.currentTarget.currentTime = selected.videoStartSeconds ?? 0 }} onTimeUpdate={(event) => { if (selected.videoMode === 'clip' && event.currentTarget.currentTime >= (selected.videoEndSeconds ?? Infinity)) event.currentTarget.pause() }} /> : <iframe src={embedUrl(selected.videoUrl, selected.videoMode === 'clip' ? selected.videoStartSeconds : undefined, selected.videoMode === 'clip' ? selected.videoEndSeconds : undefined)} title="點位影片" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen />}</div> : <div className="video-placeholder">這筆示範資料尚未附影片。</div>)}<button className="primary" onClick={() => setVideoOpen(true)}><Play size={15} /> {selected.videoMode === 'clip' ? '播放重點片段' : '播放教學影片'}</button></section>}
+      {selected && <section className="detail-panel"><div className="detail-title"><div><div className="eyebrow">{mapCatalog.find((map) => map.id === selected.mapId)?.shortName} · {selected.side}</div><h2>{selected.title}</h2></div><div className="detail-actions">{admin && <button className="outline" onClick={() => startEditingLineup(selected)}><Pencil size={13} /> 修改點位</button>}<button className="close-text" onClick={() => setSelected(null)}>收起</button></div></div><div className="detail-route"><span className="pin start-pin">S</span><div><small>起始位置座標</small><b>{formatPoint(selected.start)}</b></div><span className="route-arrow">→</span><span className="pin target-pin"><Crosshair size={15} /></span><div><small>生效位置座標</small><b>{formatPoint(selected.impact)}</b></div></div><p>{selected.instructions}</p>{videoOpen && (selected.videoUrl ? <div className="video-box">{isDirectVideo(selected.videoUrl) ? <video key={selected.id} src={selected.videoUrl} controls playsInline autoPlay onLoadedMetadata={(event) => { if (selected.videoMode === 'clip') event.currentTarget.currentTime = selected.videoStartSeconds ?? 0 }} onTimeUpdate={(event) => { if (selected.videoMode === 'clip' && event.currentTarget.currentTime >= (selected.videoEndSeconds ?? Infinity)) event.currentTarget.pause() }} /> : <iframe src={embedUrl(selected.videoUrl, selected.videoMode === 'clip' ? selected.videoStartSeconds : undefined, selected.videoMode === 'clip' ? selected.videoEndSeconds : undefined)} title="點位影片" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen />}</div> : <div className="video-placeholder">這筆示範資料尚未附影片。</div>)}<button className="primary" onClick={() => setVideoOpen(true)}><Play size={15} /> {selected.videoMode === 'clip' ? '播放重點片段' : '播放教學影片'}</button></section>}
       <footer>LINEUP DATABASE · 示範模式資料只儲存在目前瀏覽器</footer></> : <section className="catalog-page"><div className="page-heading"><div><div className="eyebrow">CONTENT CATALOG</div><h1>{page === 'maps' ? '地圖管理' : '特務管理'}</h1><p>{page === 'maps' ? '檢視平面圖，管理員可新增地圖或更新地圖圖片。' : '檢視特務與技能圖示，管理員可新增特務或更新素材。'}</p></div>{!admin && <button className="outline" onClick={() => setModal('login')}>管理員登入以編輯</button>}</div><CatalogManager key={page} section={page} maps={mapCatalog} agents={agentCatalog} admin={admin} onRefresh={refreshCatalog} notify={notify} /></section>}</main>
-    {modal && <div className={`modal-backdrop ${pick && modal === 'create' ? 'picking-map' : ''}`} onMouseDown={(e) => { if (e.target === e.currentTarget) setModal(null) }}><section className="modal"><div className="modal-head"><div><div className="eyebrow">{modal === 'login' ? 'ADMIN ACCESS' : 'CONTENT MANAGEMENT'}</div><h2>{modal === 'login' ? '管理員登入' : '新增點位'}</h2></div><button className="modal-close" onClick={() => setModal(null)}>×</button></div>
-      {modal === 'login' ? <form className="form-stack" onSubmit={async (e) => { e.preventDefault(); const data = new FormData(e.currentTarget); if (supabase) { const { data: result, error } = await supabase.auth.signInWithPassword({ email: String(data.get('email')), password: String(data.get('password')) }); if (error) { notify(`登入失敗：${error.message}`); return } const allowed = await verifyAdmin(result.user.id); if (allowed) { setModal(null); notify('Supabase 管理員登入成功') } else { await supabase.auth.signOut(); notify('帳號已登入，但尚未加入管理員名單') } } else if (data.get('email') === 'admin' && data.get('password') === 'lineup123') { setAdmin(true); setModal(null); notify('已進入示範管理員模式') } else notify('示範帳密錯誤：admin / lineup123') }}><label>{supabase ? '管理員 Email' : '示範帳號'}<input name="email" type={supabase ? 'email' : 'text'} defaultValue={supabase ? '' : 'admin'} required /></label><label>密碼<input name="password" type="password" required /></label><button className="primary" type="submit"><ShieldCheck size={15} /> {supabase ? '使用 Supabase 登入' : '登入示範管理介面'}</button><small className="form-help">{supabase ? '先在 Supabase Authentication 建立帳號，並將使用者加入 admin_users。' : '示範帳密：admin / lineup123'}</small></form> : <form className="form-stack" onSubmit={submitLineup}><label>地圖<select value={mapId} onChange={(e) => chooseMap(e.target.value)}>{mapCatalog.map((item) => <option key={item.id} value={item.id}>{item.shortName} · {item.name}</option>)}</select></label><label>特務<select value={agentId} onChange={(e) => { setAgentId(e.target.value); setAbilityId(null) }}>{agentCatalog.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>技能<select name="abilityId" key={agentId} defaultValue={agent.abilities[0].id}>{agent.abilities.map((item) => <option key={item.id} value={item.id}>{item.key} · {item.name}</option>)}</select></label><div className="two-fields"><label>攻守<select name="side"><option>進攻</option><option>防守</option></select></label><label>點位標題<input name="title" required placeholder="例如：A 天堂燃燒彈" /></label></div><label>操作說明<textarea name="instructions" rows={3} /></label><label>影片網址<input name="videoUrl" type="url" placeholder="YouTube 或影片網址" /></label><label>影片檔（Supabase Storage）<input name="videoFile" type="file" accept="video/*" /></label><label>播放模式<select value={videoMode} onChange={(event) => setVideoMode(event.target.value as 'full' | 'clip')}><option value="full">播放全片</option><option value="clip">只播放指定片段</option></select></label>{videoMode === 'clip' && <><div className="two-fields"><label>片段開始時間<input name="videoStart" type="text" inputMode="numeric" placeholder="例如 01:20" pattern="(?:[0-9]+:)?[0-5]?[0-9]:[0-5][0-9]|[0-9]+" required /></label><label>片段結束時間<input name="videoEnd" type="text" inputMode="numeric" placeholder="例如 01:45" pattern="(?:[0-9]+:)?[0-5]?[0-9]:[0-5][0-9]|[0-9]+" required /></label></div><small className="form-help">可輸入 mm:ss 或 hh:mm:ss；影片播到結束時間會自動停止。</small></>}<div className="coord-row"><span>起始點：{start ? formatPoint(start) : '尚未在地圖點選'}</span><button type="button" className="outline" onClick={() => startPicking('start')}>在地圖點起始位置</button></div><div className="coord-row"><span>生效點：{impact ? formatPoint(impact) : '尚未在地圖點選'}</span><button type="button" className="outline" onClick={() => startPicking('impact')}>在地圖點生效位置</button></div><button className="primary" type="submit"><Plus size={15} /> 儲存點位</button></form>}
+    {modal && <div className={`modal-backdrop ${pick && (modal === 'create' || modal === 'edit') ? 'picking-map' : ''}`} onMouseDown={(event) => { if (!saving && event.target === event.currentTarget) { setModal(null); setEditingLineup(null) } }}><section className="modal"><div className="modal-head"><div><div className="eyebrow">{modal === 'login' ? 'ADMIN ACCESS' : 'CONTENT MANAGEMENT'}</div><h2>{modal === 'login' ? '管理員登入' : modal === 'edit' ? '修改點位' : '新增點位'}</h2></div><button className="modal-close" disabled={saving} onClick={() => { setModal(null); setEditingLineup(null) }}>×</button></div>
+      {modal === 'login' ? <form className="form-stack" onSubmit={async (e) => { e.preventDefault(); const data = new FormData(e.currentTarget); if (supabase) { const { data: result, error } = await supabase.auth.signInWithPassword({ email: String(data.get('email')), password: String(data.get('password')) }); if (error) { notify(`登入失敗：${error.message}`); return } const allowed = await verifyAdmin(result.user.id); if (allowed) { setModal(null); notify('Supabase 管理員登入成功') } else { await supabase.auth.signOut(); notify('帳號已登入，但尚未加入管理員名單') } } else if (data.get('email') === 'admin' && data.get('password') === 'lineup123') { setAdmin(true); setModal(null); notify('已進入示範管理員模式') } else notify('示範帳密錯誤：admin / lineup123') }}><label>{supabase ? '管理員 Email' : '示範帳號'}<input name="email" type={supabase ? 'email' : 'text'} defaultValue={supabase ? '' : 'admin'} required /></label><label>密碼<input name="password" type="password" required /></label><button className="primary" type="submit"><ShieldCheck size={15} /> {supabase ? '使用 Supabase 登入' : '登入示範管理介面'}</button><small className="form-help">{supabase ? '先在 Supabase Authentication 建立帳號，並將使用者加入 admin_users。' : '示範帳密：admin / lineup123'}</small></form> : <LineupEditor formKey={`${modal}-${editingLineup?.id ?? 'new'}`} maps={mapCatalog} agents={agentCatalog} mapId={mapId} agentId={agentId} start={start} impact={impact} videoMode={videoMode} initialLineup={editingLineup} saving={saving} saveStatus={saveStatus} onMapChange={chooseMap} onAgentChange={(id) => { setAgentId(id); setAbilityId(null) }} onVideoModeChange={setVideoMode} onPickStart={() => startPicking('start')} onPickImpact={() => startPicking('impact')} onSubmit={submitLineup} onClose={() => { setModal(null); setEditingLineup(null); setPick(null) }} formatPoint={formatPoint} formatTimestamp={formatTimestamp} />}
     </section></div>}
     {notice && <div className="toast">{notice}</div>}
   </div>
