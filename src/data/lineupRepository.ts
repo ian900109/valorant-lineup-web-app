@@ -70,17 +70,29 @@ async function lineupVideoUrl(value: string | null) {
   return data.signedUrl
 }
 
+async function resolveLineupVideo(value: string | null) {
+  try {
+    return { videoUrl: await lineupVideoUrl(value), videoUnavailable: false }
+  } catch (error) {
+    console.warn('Could not load lineup video; lineup data will remain available:', error)
+    return { videoUrl: undefined, videoUnavailable: true }
+  }
+}
+
 export class SupabaseLineupRepository implements LineupRepository {
   async list(): Promise<Lineup[]> {
     if (!supabase) throw new Error('尚未設定 Supabase 連線')
     const { data, error } = await supabase.from('lineups').select('*').order('created_at', { ascending: false })
     if (error) throw error
-    return Promise.all((data as DbLineup[]).map(async (row) => ({
-      id: row.id, mapId: row.map_id, agentId: row.agent_id, abilityId: row.ability_id, title: row.title, site: row.site,
-      startLabel: row.start_label, side: row.side, start: { x: row.start_x, y: row.start_y }, impact: { x: row.impact_x, y: row.impact_y },
-      instructions: row.instructions, videoUrl: await lineupVideoUrl(row.video_path), videoMode: row.video_mode ?? 'full',
-      videoStartSeconds: row.video_start_seconds ?? undefined, videoEndSeconds: row.video_end_seconds ?? undefined, createdAt: row.created_at,
-    })))
+    return Promise.all((data as DbLineup[]).map(async (row) => {
+      const video = await resolveLineupVideo(row.video_path)
+      return {
+        id: row.id, mapId: row.map_id, agentId: row.agent_id, abilityId: row.ability_id, title: row.title, site: row.site,
+        startLabel: row.start_label, side: row.side, start: { x: row.start_x, y: row.start_y }, impact: { x: row.impact_x, y: row.impact_y },
+        instructions: row.instructions, ...video, videoMode: row.video_mode ?? 'full',
+        videoStartSeconds: row.video_start_seconds ?? undefined, videoEndSeconds: row.video_end_seconds ?? undefined, createdAt: row.created_at,
+      }
+    }))
   }
 
   async save(lineup: Lineup, videoFile?: File, onStatus?: (message: string) => void): Promise<Lineup> {
@@ -141,7 +153,8 @@ export class SupabaseLineupRepository implements LineupRepository {
       if (removeError) console.error('Could not remove replaced lineup video:', removeError)
     }
     const row = data as DbLineup
-    return { ...lineup, videoUrl: await lineupVideoUrl(row.video_path), createdAt: row.created_at }
+    const video = await resolveLineupVideo(row.video_path)
+    return { ...lineup, ...video, createdAt: row.created_at }
   }
 
   async delete(lineup: Lineup): Promise<void> {
