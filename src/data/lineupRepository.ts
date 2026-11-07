@@ -102,6 +102,7 @@ export class SupabaseLineupRepository implements LineupRepository {
           list.push({ id: image.id, position: image.position, url: signedError ? undefined : signed.signedUrl, unavailable: Boolean(signedError) })
           imagesByLineup.set(image.lineup_id, list)
         }))
+        for (const images of imagesByLineup.values()) images.sort((a, b) => a.position - b.position)
       }
     }
     return Promise.all(rows.map(async (row) => {
