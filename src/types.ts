@@ -1,6 +1,7 @@
 export type MapRecord = { id: string; name: string; shortName: string; imageUrl?: string }
 export type Ability = { id: string; key: string; name: string; iconUrl?: string }
 export type Agent = { id: string; name: string; role: string; portraitUrl?: string; abilities: Ability[] }
+export type LineupImage = { id: string; url?: string; unavailable?: boolean; position: number }
 export type Lineup = {
   id: string
   mapId: string
@@ -13,6 +14,7 @@ export type Lineup = {
   start: { x: number; y: number }
   impact: { x: number; y: number }
   instructions: string
+  images?: LineupImage[]
   videoUrl?: string
   videoUnavailable?: boolean
   videoMode?: 'full' | 'clip'

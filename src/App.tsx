@@ -6,6 +6,7 @@ import { lineupRepository } from './data/lineupRepository'
 import CatalogManager from './components/CatalogManager'
 import LineupEditor from './components/LineupEditor'
 import SiteAccessGate from './components/SiteAccessGate'
+import type { PendingScreenshot } from './components/ScreenCaptureTool'
 import { getCatalog } from './data/catalogRepository'
 import { supabase } from './lib/supabase'
 import type { Lineup } from './types'
@@ -41,6 +42,8 @@ export default function App() {
   const [videoMode, setVideoMode] = useState<'full' | 'clip'>('full')
   const [editingLineup, setEditingLineup] = useState<Lineup | null>(null)
   const [saving, setSaving] = useState(false)
+  const [pendingScreenshots, setPendingScreenshots] = useState<PendingScreenshot[]>([])
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState('正在儲存…')
   const [markerChoices, setMarkerChoices] = useState<{ items: Lineup[]; point: { x: number; y: number } } | null>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -138,12 +141,18 @@ export default function App() {
   }
   function startPicking(which: 'start' | 'impact') { setMarkerChoices(null); setPick(which) }
   function startCreatingLineup() {
+    clearPendingScreenshots()
     setEditingLineup(null); setMapId(selectedMap.id); setAgentId(agent.id); setStart(null); setImpact(null)
     setVideoMode('full'); setModal('create')
   }
   function startEditingLineup(item: Lineup) {
+    clearPendingScreenshots()
     setEditingLineup(item); setMapId(item.mapId); setAgentId(item.agentId); setStart(item.start); setImpact(item.impact)
     setVideoMode(item.videoMode ?? 'full'); setSelected(item); setVideoOpen(false); setModal('edit')
+  }
+  function clearPendingScreenshots() {
+    pendingScreenshots.forEach((image) => URL.revokeObjectURL(image.previewUrl))
+    setPendingScreenshots([])
   }
   function selectMapMarker(item: Lineup, location: 'start' | 'impact') {
     const rect = worldRef.current?.getBoundingClientRect()
@@ -175,15 +184,37 @@ export default function App() {
     }
     const lineup: Lineup = { id: editingLineup?.id ?? crypto.randomUUID(), mapId, agentId, abilityId: String(form.get('abilityId')), title: String(form.get('title')).trim(), site: formatPoint(impact), startLabel: formatPoint(start), side: String(form.get('side')) as Lineup['side'], start, impact, instructions: String(form.get('instructions')).trim(), videoUrl: videoUrl || undefined, videoMode, videoStartSeconds: videoStartSeconds ?? undefined, videoEndSeconds: videoEndSeconds ?? undefined, createdAt: editingLineup?.createdAt ?? new Date().toISOString() }
     savingRef.current = true; setSaving(true); setSaveStatus(file ? '正在上傳影片…' : '正在儲存點位…')
+    let persisted: Lineup | null = null
     try {
-      if (editingLineup) await lineupRepository.update(lineup, file, setSaveStatus)
-      else await lineupRepository.save(lineup, file, setSaveStatus)
+      persisted = editingLineup
+        ? await lineupRepository.update(lineup, file, setSaveStatus)
+        : await lineupRepository.save(lineup, file, setSaveStatus)
+      if (pendingScreenshots.length) {
+        await lineupRepository.uploadImages(persisted.id, pendingScreenshots.map((image) => image.file), setSaveStatus)
+      }
       const refreshed = await lineupRepository.list()
-      setLineups(refreshed); setSelected(refreshed.find((item) => item.id === lineup.id) ?? null)
+      setLineups(refreshed); setSelected(refreshed.find((item) => item.id === persisted!.id) ?? null)
       setModal(null); setStart(null); setImpact(null); setEditingLineup(null); setMarkerChoices(null)
+      clearPendingScreenshots()
       notify(editingLineup ? '點位已更新' : supabase ? '點位已儲存至 Supabase' : '示範點位已儲存在這台裝置')
-    } catch (error) { notify(`儲存失敗：${error instanceof Error ? error.message : '請確認資料表與權限設定'}`) }
+    } catch (error) {
+      if (persisted && pendingScreenshots.length) {
+        setEditingLineup(persisted); setModal('edit')
+      }
+      notify(`${persisted ? '點位已儲存，但截圖尚未上傳' : '儲存失敗'}：${error instanceof Error ? error.message : '請確認資料表與權限設定'}`)
+    }
     finally { savingRef.current = false; setSaving(false) }
+  }
+  async function deleteScreenshot(image: NonNullable<Lineup['images']>[number]) {
+    if (!admin || !window.confirm('確定刪除這張教學截圖？此操作無法復原。')) return
+    try {
+      await lineupRepository.deleteImage(image)
+      const refreshed = await lineupRepository.list()
+      setLineups(refreshed)
+      setSelected(refreshed.find((item) => item.id === selected?.id) ?? null)
+      setImagePreview(null)
+      notify('教學截圖已刪除')
+    } catch (error) { notify(`截圖刪除失敗：${error instanceof Error ? error.message : '請確認資料表與權限設定'}`) }
   }
   async function deleteLineup(item: Lineup) {
     if (!admin) { notify('只有管理員可以刪除點位'); return }
@@ -241,12 +272,14 @@ export default function App() {
         <div className="detail-title"><div><div className="eyebrow">{mapCatalog.find((map) => map.id === selected.mapId)?.shortName} · {selected.side}</div><h2>{selected.title}</h2></div><div className="detail-actions">{admin && <button className="outline" onClick={() => startEditingLineup(selected)}><Pencil size={13} /> 修改點位</button>}<button className="close-text" onClick={() => setSelected(null)}>收起</button></div></div>
         <div className="detail-route"><span className="pin start-pin">S</span><div><small>起始位置座標</small><b>{formatPoint(selected.start)}</b></div><span className="route-arrow">→</span><span className="pin target-pin"><Crosshair size={15} /></span><div><small>生效位置座標</small><b>{formatPoint(selected.impact)}</b></div></div>
         <p>{selected.instructions}</p>
+        {Boolean(selected.images?.length) && <div className="lineup-gallery"><div className="gallery-heading"><b>教學截圖</b><small>{selected.images?.length} 張</small></div><div className="gallery-grid">{selected.images?.map((image, index) => <div className="gallery-item" key={image.id}>{image.url ? <button type="button" className="gallery-open" onClick={() => setImagePreview(image.url!)} aria-label={`查看教學截圖 ${index + 1}`}><img src={image.url} alt={`教學步驟 ${index + 1}`} /></button> : <div className="gallery-unavailable">圖片無法載入</div>}{admin && <button type="button" className="gallery-delete" onClick={() => void deleteScreenshot(image)} aria-label={`刪除教學截圖 ${index + 1}`}><Trash2 size={13} /></button>}<small>步驟 {index + 1}</small></div>)}</div></div>}
         <button className="primary" onClick={() => setVideoOpen(true)}><Play size={15} /> {selected.videoUnavailable ? '無法播放該影片' : selected.videoUrl && isInstagramUrl(selected.videoUrl) ? '預覽 Instagram 影片' : selected.videoMode === 'clip' ? '播放重點片段' : '播放教學影片'}</button>
       </section>}
       {selected && videoOpen && <div className="video-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setVideoOpen(false) }}><section className="video-preview-modal" role="dialog" aria-modal="true" aria-labelledby="video-preview-title"><header><div><div className="eyebrow">LINEUP VIDEO</div><h2 id="video-preview-title">{selected.title}</h2></div><button className="video-preview-close" aria-label="關閉影片預覽" onClick={() => setVideoOpen(false)}>×</button></header>{selected.videoUnavailable ? <div className="video-placeholder">無法播放該影片，影片檔案可能已不存在。點位資料仍可正常使用。</div> : selected.videoUrl ? <><div className={`video-preview-box ${isInstagramUrl(selected.videoUrl) ? 'instagram' : ''}`}>{isDirectVideo(selected.videoUrl) ? <video key={selected.id} src={selected.videoUrl} controls playsInline autoPlay onLoadedMetadata={(event) => { if (selected.videoMode === 'clip') event.currentTarget.currentTime = selected.videoStartSeconds ?? 0 }} onTimeUpdate={(event) => { if (selected.videoMode === 'clip' && event.currentTarget.currentTime >= (selected.videoEndSeconds ?? Infinity)) event.currentTarget.pause() }} /> : <iframe src={embedUrl(selected.videoUrl, !isInstagramUrl(selected.videoUrl) && selected.videoMode === 'clip' ? selected.videoStartSeconds : undefined, !isInstagramUrl(selected.videoUrl) && selected.videoMode === 'clip' ? selected.videoEndSeconds : undefined)} title="點位影片" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen />}</div>{isInstagramUrl(selected.videoUrl) && <a className="instagram-fallback" href={selected.videoUrl} target="_blank" rel="noreferrer">若預覽無法播放，前往 Instagram 開啟 ↗</a>}</> : <div className="video-placeholder">這筆點位尚未附影片。</div>}</section></div>}
+      {imagePreview && <div className="image-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setImagePreview(null) }}><section className="image-preview-modal" role="dialog" aria-modal="true" aria-label="教學截圖預覽"><button type="button" className="video-preview-close" aria-label="關閉圖片預覽" onClick={() => setImagePreview(null)}>×</button><img src={imagePreview} alt="教學截圖放大預覽" /></section></div>}
       <footer>LINEUP DATABASE · 示範模式資料只儲存在目前瀏覽器</footer></> : <section className="catalog-page"><div className="page-heading"><div><div className="eyebrow">CONTENT CATALOG</div><h1>{page === 'maps' ? '地圖管理' : '特務管理'}</h1><p>{page === 'maps' ? '檢視平面圖，管理員可新增地圖或更新地圖圖片。' : '檢視特務與技能圖示，管理員可新增特務或更新素材。'}</p></div>{!admin && <button className="outline" onClick={() => setModal('login')}>管理員登入以編輯</button>}</div><CatalogManager key={page} section={page} maps={mapCatalog} agents={agentCatalog} admin={admin} onRefresh={refreshCatalog} notify={notify} /></section>}</main>
-    {modal && <div className={`modal-backdrop ${pick && (modal === 'create' || modal === 'edit') ? 'picking-map' : ''}`} onMouseDown={(event) => { if (!saving && event.target === event.currentTarget) { setModal(null); setEditingLineup(null) } }}><section className="modal"><div className="modal-head"><div><div className="eyebrow">{modal === 'login' ? 'ADMIN ACCESS' : 'CONTENT MANAGEMENT'}</div><h2>{modal === 'login' ? '管理員登入' : modal === 'edit' ? '修改點位' : '新增點位'}</h2></div><button className="modal-close" disabled={saving} onClick={() => { setModal(null); setEditingLineup(null) }}>×</button></div>
-      {modal === 'login' ? <form className="form-stack" onSubmit={async (e) => { e.preventDefault(); const data = new FormData(e.currentTarget); if (supabase) { const { data: result, error } = await supabase.auth.signInWithPassword({ email: String(data.get('email')), password: String(data.get('password')) }); if (error) { notify(`登入失敗：${error.message}`); return } const allowed = await verifyAdmin(result.user.id); if (allowed) { setModal(null); notify('Supabase 管理員登入成功') } else { await supabase.auth.signOut(); notify('帳號已登入，但尚未加入管理員名單') } } else if (data.get('email') === 'admin' && data.get('password') === 'lineup123') { setAdmin(true); setModal(null); notify('已進入示範管理員模式') } else notify('示範帳密錯誤：admin / lineup123') }}><label>{supabase ? '管理員 Email' : '示範帳號'}<input name="email" type={supabase ? 'email' : 'text'} defaultValue={supabase ? '' : 'admin'} required /></label><label>密碼<input name="password" type="password" required /></label><button className="primary" type="submit"><ShieldCheck size={15} /> {supabase ? '使用 Supabase 登入' : '登入示範管理介面'}</button><small className="form-help">{supabase ? '先在 Supabase Authentication 建立帳號，並將使用者加入 admin_users。' : '示範帳密：admin / lineup123'}</small></form> : <LineupEditor formKey={`${modal}-${editingLineup?.id ?? 'new'}`} maps={mapCatalog} agents={agentCatalog} mapId={mapId} agentId={agentId} start={start} impact={impact} videoMode={videoMode} initialLineup={editingLineup} saving={saving} saveStatus={saveStatus} onMapChange={chooseMap} onAgentChange={(id) => { setAgentId(id); setAbilityId(null) }} onVideoModeChange={setVideoMode} onPickStart={() => startPicking('start')} onPickImpact={() => startPicking('impact')} onSubmit={submitLineup} onClose={() => { setModal(null); setEditingLineup(null); setPick(null) }} formatPoint={formatPoint} formatTimestamp={formatTimestamp} />}
+    {modal && <div className={`modal-backdrop ${pick && (modal === 'create' || modal === 'edit') ? 'picking-map' : ''}`} onMouseDown={(event) => { if (!saving && event.target === event.currentTarget) { setModal(null); setEditingLineup(null); clearPendingScreenshots() } }}><section className="modal"><div className="modal-head"><div><div className="eyebrow">{modal === 'login' ? 'ADMIN ACCESS' : 'CONTENT MANAGEMENT'}</div><h2>{modal === 'login' ? '管理員登入' : modal === 'edit' ? '修改點位' : '新增點位'}</h2></div><button className="modal-close" disabled={saving} onClick={() => { setModal(null); setEditingLineup(null); clearPendingScreenshots() }}>×</button></div>
+      {modal === 'login' ? <form className="form-stack" onSubmit={async (e) => { e.preventDefault(); const data = new FormData(e.currentTarget); if (supabase) { const { data: result, error } = await supabase.auth.signInWithPassword({ email: String(data.get('email')), password: String(data.get('password')) }); if (error) { notify(`登入失敗：${error.message}`); return } const allowed = await verifyAdmin(result.user.id); if (allowed) { setModal(null); notify('Supabase 管理員登入成功') } else { await supabase.auth.signOut(); notify('帳號已登入，但尚未加入管理員名單') } } else if (data.get('email') === 'admin' && data.get('password') === 'lineup123') { setAdmin(true); setModal(null); notify('已進入示範管理員模式') } else notify('示範帳密錯誤：admin / lineup123') }}><label>{supabase ? '管理員 Email' : '示範帳號'}<input name="email" type={supabase ? 'email' : 'text'} defaultValue={supabase ? '' : 'admin'} required /></label><label>密碼<input name="password" type="password" required /></label><button className="primary" type="submit"><ShieldCheck size={15} /> {supabase ? '使用 Supabase 登入' : '登入示範管理介面'}</button><small className="form-help">{supabase ? '先在 Supabase Authentication 建立帳號，並將使用者加入 admin_users。' : '示範帳密：admin / lineup123'}</small></form> : <LineupEditor formKey={`${modal}-${editingLineup?.id ?? 'new'}`} maps={mapCatalog} agents={agentCatalog} mapId={mapId} agentId={agentId} start={start} impact={impact} videoMode={videoMode} initialLineup={editingLineup} saving={saving} saveStatus={saveStatus} pendingScreenshots={pendingScreenshots} captureEnabled={Boolean(supabase)} onPendingScreenshotsChange={setPendingScreenshots} onMapChange={chooseMap} onAgentChange={(id) => { setAgentId(id); setAbilityId(null) }} onVideoModeChange={setVideoMode} onPickStart={() => startPicking('start')} onPickImpact={() => startPicking('impact')} onSubmit={submitLineup} onClose={() => { setModal(null); setEditingLineup(null); setPick(null); clearPendingScreenshots() }} formatPoint={formatPoint} formatTimestamp={formatTimestamp} />}
     </section></div>}
     {notice && <div className="toast">{notice}</div>}
   </div>
