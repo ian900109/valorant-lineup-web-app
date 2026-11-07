@@ -203,6 +203,13 @@ export class SupabaseLineupRepository implements LineupRepository {
       if (uploadedPath) await supabase.storage.from('lineup-assets').remove([uploadedPath])
       throw error
     }
+    if (lineup.images?.length) {
+      onStatus?.('正在儲存截圖順序…')
+      for (const [position, image] of lineup.images.entries()) {
+        const { error: positionError } = await supabase.from('lineup_images').update({ position }).eq('id', image.id).eq('lineup_id', lineup.id)
+        if (positionError) throw positionError
+      }
+    }
     if (previousPath && previousPath !== videoPath) {
       const { error: removeError } = await supabase.storage.from('lineup-assets').remove([previousPath])
       if (removeError) console.error('Could not remove replaced lineup video:', removeError)

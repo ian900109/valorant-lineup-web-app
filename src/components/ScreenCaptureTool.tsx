@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Camera, Crop as CropIcon, MonitorUp, Trash2, X } from 'lucide-react'
+import { Camera, ChevronDown, ChevronUp, Crop as CropIcon, MonitorUp, Trash2, X } from 'lucide-react'
 
 export type PendingScreenshot = { id: string; file: File; previewUrl: string }
 
@@ -7,11 +7,12 @@ type Props = {
   pending: PendingScreenshot[]
   disabled?: boolean
   onChange: (images: PendingScreenshot[]) => void
+  onMove: (index: number, offset: -1 | 1) => void
 }
 
 type Crop = { x: number; y: number; width: number; height: number }
 
-export default function ScreenCaptureTool({ pending, disabled = false, onChange }: Props) {
+export default function ScreenCaptureTool({ pending, disabled = false, onChange, onMove }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const dragRef = useRef<{ x: number; y: number } | null>(null)
@@ -127,6 +128,6 @@ export default function ScreenCaptureTool({ pending, disabled = false, onChange 
       <div className="capture-actions">{crop && !selectionEnabled && <button type="button" className="outline" onClick={() => { setCrop(null); setSelectionEnabled(true); setMessage('重新拖曳框選新的範圍。') }}><CropIcon size={14} /> 重新選定擷取範圍</button>}<button type="button" className="primary" disabled={!crop || selectionEnabled} onClick={() => void captureCrop()}><Camera size={14} /> 擷取選取範圍</button><button type="button" className="outline" onClick={stopSharing}><X size={14} /> 停止分享</button></div>
     </>}
     {message && <small className="capture-message">{message}</small>}
-    {pending.length > 0 && <div className="pending-screenshots">{pending.map((item, index) => <div className="pending-screenshot" key={item.id}><img src={item.previewUrl} alt={`待上傳截圖 ${index + 1}`} /><span>{index + 1}</span><button type="button" aria-label={`移除第 ${index + 1} 張截圖`} disabled={disabled} onClick={() => removePending(item.id)}><Trash2 size={13} /></button></div>)}</div>}
+    {pending.length > 0 && <div className="pending-screenshots">{pending.map((item, index) => <div className="pending-screenshot" key={item.id}><img src={item.previewUrl} alt={`待上傳截圖 ${index + 1}`} /><span>{index + 1}</span><div className="pending-image-actions"><button type="button" aria-label={`第 ${index + 1} 張截圖上移`} title="上移" disabled={disabled || index === 0} onClick={() => onMove(index, -1)}><ChevronUp size={13} /></button><button type="button" aria-label={`第 ${index + 1} 張截圖下移`} title="下移" disabled={disabled || index === pending.length - 1} onClick={() => onMove(index, 1)}><ChevronDown size={13} /></button><button type="button" aria-label={`移除第 ${index + 1} 張截圖`} title="移除" disabled={disabled} onClick={() => removePending(item.id)}><Trash2 size={13} /></button></div></div>)}</div>}
   </section>
 }

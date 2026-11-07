@@ -1,5 +1,5 @@
 import type { FormEventHandler } from 'react'
-import { LoaderCircle, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, LoaderCircle, Plus, Trash2 } from 'lucide-react'
 import type { Agent, Lineup, LineupImage, MapRecord } from '../types'
 import ScreenCaptureTool, { type PendingScreenshot } from './ScreenCaptureTool'
 
@@ -19,7 +19,9 @@ type Props = {
   pendingScreenshots: PendingScreenshot[]
   captureEnabled: boolean
   onPendingScreenshotsChange: (images: PendingScreenshot[]) => void
+  onMovePendingScreenshot: (index: number, offset: -1 | 1) => void
   onDeleteImage: (image: LineupImage) => void
+  onMoveImage: (from: number, to: number) => void
   onMapChange: (id: string) => void
   onAgentChange: (id: string) => void
   onVideoModeChange: (mode: 'full' | 'clip') => void
@@ -40,8 +42,8 @@ export default function LineupEditor(props: Props) {
     <label>技能<select name="abilityId" key={props.agentId} defaultValue={agent?.abilities.find((ability) => ability.id === existing?.abilityId)?.id ?? agent?.abilities[0]?.id}>{agent?.abilities.map((item) => <option key={item.id} value={item.id}>{item.key} · {item.name}</option>)}</select></label>
     <div className="two-fields"><label>攻守<select name="side" defaultValue={existing?.side ?? '進攻'}><option>進攻</option><option>防守</option></select></label><label>點位標題<input name="title" required defaultValue={existing?.title ?? ''} placeholder="例如：A 天堂燃燒彈" /></label></div>
     <label>操作說明<textarea name="instructions" rows={3} defaultValue={existing?.instructions ?? ''} /></label>
-    {Boolean(existing?.images?.length) && <div className="existing-screenshots"><b>已上傳截圖 · 可在此管理</b><div>{existing?.images?.map((image, index) => <article key={image.id}>{image.url ? <img src={image.url} alt={`已上傳截圖 ${index + 1}`} /> : <span>圖片無法載入</span>}<small>步驟 {index + 1}</small><button type="button" className="delete-asset" disabled={props.saving} onClick={() => props.onDeleteImage(image)}><Trash2 size={12} /> 刪除照片</button></article>)}</div></div>}
-    <ScreenCaptureTool pending={props.pendingScreenshots} disabled={props.saving || !props.captureEnabled} onChange={props.onPendingScreenshotsChange} />
+    {Boolean(existing?.images?.length) && <div className="existing-screenshots"><b>已上傳截圖 · 可在此管理順序與刪除</b><div>{existing?.images?.map((image, index) => <article key={image.id}>{image.url ? <img src={image.url} alt={`已上傳截圖 ${index + 1}`} /> : <span>圖片無法載入</span>}<small>步驟 {index + 1}</small><div className="screenshot-order-actions"><button type="button" aria-label={`步驟 ${index + 1} 上移`} title="上移" disabled={props.saving || index === 0} onClick={() => props.onMoveImage(index, index - 1)}><ChevronUp size={13} /></button><button type="button" aria-label={`步驟 ${index + 1} 下移`} title="下移" disabled={props.saving || index === (existing?.images?.length ?? 0) - 1} onClick={() => props.onMoveImage(index, index + 1)}><ChevronDown size={13} /></button><button type="button" className="delete-asset" disabled={props.saving} onClick={() => props.onDeleteImage(image)}><Trash2 size={12} /> 刪除</button></div></article>)}</div></div>}
+    <ScreenCaptureTool pending={props.pendingScreenshots} disabled={props.saving || !props.captureEnabled} onChange={props.onPendingScreenshotsChange} onMove={props.onMovePendingScreenshot} />
     {!props.captureEnabled && <small className="form-help">畫面截圖上傳需要連接 Supabase；目前示範模式不會上傳或保留截圖。</small>}
     <label>影片網址<input name="videoUrl" type="url" defaultValue={existing?.videoUrl ?? ''} placeholder="YouTube 或影片網址；不換影片可留原網址" /></label>
     <label>更換影片檔（Supabase Storage）<input name="videoFile" type="file" accept="video/*" /></label>
