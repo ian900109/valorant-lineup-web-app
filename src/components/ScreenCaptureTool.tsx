@@ -95,19 +95,33 @@ export default function ScreenCaptureTool({ pending, disabled = false, onChange,
       setMessage('請先在畫面上拖曳框選一個範圍。')
       return
     }
-    const scale = Math.min(1, 1600 / Math.max(crop.width, crop.height))
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(crop.width * scale))
-    canvas.height = Math.max(1, Math.round(crop.height * scale))
-    const context = canvas.getContext('2d')
-    if (!context) { setMessage('瀏覽器無法建立圖片，請重試。'); return }
-    context.drawImage(videoRef.current, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height)
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/webp', 0.86))
+    const sourceLongestSide = Math.max(crop.width, crop.height)
+    const firstSize = Math.min(2048, Math.max(1280, sourceLongestSide))
+    const sizes = [...new Set([firstSize, 1800, 1600, 1400, 1280, 1152, 1024, 900].filter((size) => size <= firstSize))]
+    const maxBytes = 700 * 1024
+    let blob: Blob | null = null
+    for (const longestSide of sizes) {
+      const scale = longestSide / sourceLongestSide
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(crop.width * scale))
+      canvas.height = Math.max(1, Math.round(crop.height * scale))
+      const context = canvas.getContext('2d')
+      if (!context) { setMessage('瀏覽器無法建立圖片，請重試。'); return }
+      context.imageSmoothingEnabled = true
+      context.imageSmoothingQuality = 'high'
+      context.drawImage(videoRef.current, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height)
+      for (const quality of [0.92, 0.88, 0.84, 0.78]) {
+        blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/webp', quality))
+        if (blob && blob.size <= maxBytes) break
+      }
+      if (blob && blob.size <= maxBytes) break
+    }
     if (!blob) { setMessage('圖片產生失敗，請重新框選。'); return }
+    if (blob.size > maxBytes) { setMessage('這張截圖內容較複雜，無法在保留可讀畫質下壓到 700 KB；請縮小框選範圍再擷取。'); return }
     const file = new File([blob], `lineup-step-${Date.now()}.webp`, { type: 'image/webp' })
     const previewUrl = URL.createObjectURL(file)
     onChange([...pending, { id: crypto.randomUUID(), file, previewUrl }])
-    setMessage(`已加入暫存截圖（${pending.length + 1} 張）；按「儲存點位」後才會上傳。`)
+    setMessage(`已加入暫存截圖（${pending.length + 1} 張，${Math.round(blob.size / 1024)} KB）；已優先保留畫質並壓在 700 KB 內，按「儲存點位」後才會上傳。`)
   }
 
   function removePending(id: string) {
@@ -118,6 +132,7 @@ export default function ScreenCaptureTool({ pending, disabled = false, onChange,
 
   return <section className="capture-tool">
     <div className="capture-heading"><div><b>教學截圖</b><small>擷取畫面並框選重點，可加入多張</small></div><span>{pending.length} 張待上傳</span></div>
+    <small className="capture-message">預設輸出長邊 1280–2048 像素；內容較複雜時會自動縮小，並將單張控制在 700 KB 內。</small>
     {!sharing ? <button type="button" className="outline capture-start" onClick={() => void startSharing()} disabled={disabled}><MonitorUp size={15} /> 開始分享畫面並擷取</button> : <>
       <div className="capture-preview" style={{ aspectRatio: `${dimensions.width} / ${dimensions.height}`, width: `min(100%, ${Math.min(700, 310 * dimensions.width / dimensions.height)}px)` }}>
         <video ref={videoRef} muted playsInline onLoadedMetadata={(event) => { const video = event.currentTarget; if (video.videoWidth && video.videoHeight) setDimensions({ width: video.videoWidth, height: video.videoHeight }); setVideoReady(true) }} />
